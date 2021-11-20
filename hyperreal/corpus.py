@@ -118,6 +118,7 @@ class PlainTextSqlite(Corpus):
 
         self.db_path = db_path
         self.db = lite.connect(self.db_path, isolation_level=None)
+        self.db.execute("pragma journal_mode=WAL")
         self.db.execute(
             """
             create table if not exists doc(
