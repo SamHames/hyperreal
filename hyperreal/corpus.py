@@ -9,6 +9,7 @@ shows concrete implementation examples.
 
 """
 
+import abc
 import sqlite3 as lite
 from typing import Protocol
 
@@ -24,7 +25,7 @@ class Corpus(Protocol):
     - Designed to enable downstream concurrent computing on those small batches.
     """
 
-    @abstractmethod
+    @abc.abstractmethod
     def docs(self, doc_keys=None, raise_on_missing=True):
         """
         Return an iterator of key-document pairs matching the given keys.
@@ -38,12 +39,12 @@ class Corpus(Protocol):
         """
         pass
 
-    @abstractmethod
+    @abc.abstractmethod
     def keys(self):
         """An iterator of all document keys present."""
         pass
 
-    @abstractmethod
+    @abc.abstractmethod
     def index(self, doc):
         """
         Returns a mapping of:
@@ -109,4 +110,61 @@ class TidyTweetCorpus(Corpus):
             "author_id": [doc["author_id"]],
             "created_at": [doc["created_at"]],
             "text": utilities.social_media_tokens(doc["text"]),
+        }
+
+
+class PlainTextSqlite(Corpus):
+    def __init__(self, db_path):
+
+        self.db_path = db_path
+        self.db = lite.connect(self.db_path, isolation_level=None)
+        self.db.execute(
+            """
+            create table if not exists doc(
+                doc_id integer primary key,
+                text
+            )
+            """
+        )
+
+    def __getstate__(self):
+        return self.db_path
+
+    def __setstate__(self, db_path):
+        self.__init__(db_path)
+
+    def add_texts(self, texts):
+        self.db.execute("savepoint add_texts")
+        self.db.executemany(
+            "insert or ignore into doc(text) values(?)", ([t] for t in texts)
+        )
+        self.db.execute("release add_texts")
+
+    def docs(self, doc_keys=None, raise_on_missing=True):
+        self.db.execute("savepoint docs")
+
+        try:
+            # Note that it's valid to pass an empty sequence of doc_keys,
+            # so we need to check sentinel explicitly.
+            if doc_keys is None:
+                doc_keys = self.keys()
+
+            for key in doc_keys:
+                doc = list(
+                    self.db.execute(
+                        "select text from doc where doc_id = ?",
+                        [key],
+                    )
+                )[0][0]
+                yield key, doc
+
+        finally:
+            self.db.execute("release docs")
+
+    def keys(self):
+        return (r[0] for r in self.db.execute("select doc_id from doc"))
+
+    def index(self, doc):
+        return {
+            "text": utilities.tokens(doc),
         }

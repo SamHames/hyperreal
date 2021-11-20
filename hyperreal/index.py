@@ -48,7 +48,13 @@ class Index:
                 """
             )
 
-    def index(self, raise_on_missing=True, n_cpus=4, batch_key_size=1000):
+    def index(
+        self,
+        raise_on_missing=True,
+        n_cpus=None,
+        batch_key_size=100,
+        max_batch_entries=100000,
+    ):
         """
         Indexes the corpus, using the provided function or the corpus default.
 
@@ -65,8 +71,10 @@ class Index:
         """
         self.db.execute("savepoint reindex")
 
-        manager = mp.Manager()
+        n_cpus = n_cpus or mp.cpu_count()
+
         mp_context = mp.get_context("spawn")
+        manager = mp_context.Manager()
 
         # Note the size limit here - this means we won't materialise too many
         # key objects in memory.
@@ -77,23 +85,24 @@ class Index:
         out_queues = [manager.Queue(10) for _ in range(n_cpus)]
 
         try:
-            # we will associate document keys to internal document ids
-            # sequentially
-            doc_keys = enumerate(corpus.keys())
-
             # We're still inside a transaction here, so processes reading from
             # the index won't see any of these changes until the release at
             # the end.
             self.db.execute("delete from doc_key")
 
-            doc_ids = []
-            doc_keys = []
+            # we will associate document keys to internal document ids
+            # sequentially
+            doc_keys = enumerate(self.corpus.keys())
+
+            batch_doc_ids = []
+            batch_doc_keys = []
             batch_size = 0
 
             # Start all of the worker processes.
             workers = [
                 mp_context.Process(
-                    target=_index_docs, args=(self.corpus, in_queue, out_queue)
+                    target=_index_docs,
+                    args=(self.corpus, in_queue, out_queue, max_batch_entries),
                 )
                 for out_queue in out_queues
             ]
@@ -102,28 +111,34 @@ class Index:
                 w.start()
 
             for doc_key in doc_keys:
+
                 self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                doc_ids.append(doc_key[0])
-                doc_keys.append(doc_key[1])
+                batch_doc_ids.append(doc_key[0])
+                batch_doc_keys.append(doc_key[1])
                 batch_size += 1
 
                 if batch_size >= batch_key_size:
-                    in_queue.put((doc_ids, doc_keys))
-                    doc_ids = []
-                    doc_keys = []
+                    in_queue.put((batch_doc_ids, batch_doc_keys))
+                    batch_doc_ids = []
+                    batch_doc_keys = []
                     batch_size = 0
             else:
-                if doc_ids:
-                    in_queue.put((doc_ids, doc_keys))
+                if batch_doc_ids:
+                    in_queue.put((batch_doc_ids, batch_doc_keys))
+
+            for w in workers:
+                in_queue.put(None)
 
             # Wait for everything to be indexed, then start aggregating and saving the results.
-            to_merge = heapq.merge(iter(out_queue, None) for out_queue in out_queues)
+            to_merge = heapq.merge(
+                *(iter(out_queue.get, None) for out_queue in out_queues)
+            )
 
             self.db.execute("delete from inverted_index")
 
             current_field, current_value, current_docs = next(to_merge)
 
-            for field, value, doc_ids in segments:
+            for field, value, doc_ids in to_merge:
                 if (field, value) == (current_field, current_value):
                     # still aggregating this field...
                     current_docs |= doc_ids
@@ -157,6 +172,7 @@ class Index:
 
         except Exception:
             self.db.execute("rollback to reindex")
+            raise
 
         finally:
             # Make sure to nicely cleanup all of the multiprocessing bits and bobs.
@@ -165,9 +181,7 @@ class Index:
             for w in workers:
                 w.join()
 
-            in_queue.close()
-            for q in out_queues:
-                q.close()
+            manager.shutdown()
 
 
 def _index_docs(corpus, input_queue, output_queue, max_batch_entries):
@@ -175,7 +189,7 @@ def _index_docs(corpus, input_queue, output_queue, max_batch_entries):
     local_db = lite.connect(":memory:", isolation_level=None)
     # Note that we create an in memory database, but use a temporary table anyway,
     # because an in-memory database can't spill to disk.
-    local_db.execute("create temporary table inverted_index (field, values, doc_ids)")
+    local_db.execute("create temporary table inverted_index (field, value, doc_ids)")
 
     batch_entries = 0
 
@@ -184,11 +198,11 @@ def _index_docs(corpus, input_queue, output_queue, max_batch_entries):
 
     # Index documents until we go over max_batch_entries, then flush that
     # to a local temporary table.
-    for doc_ids, doc_keys in iter(input_queue, None):
+    for doc_ids, doc_keys in iter(input_queue.get, None):
 
         docs = corpus.docs(doc_keys=doc_keys)
 
-        for doc_id, doc in zip(doc_ids, docs):
+        for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
             for field, values in features.items():
 
@@ -197,15 +211,26 @@ def _index_docs(corpus, input_queue, output_queue, max_batch_entries):
                 for value in values:
                     batch[field][value].add(doc_id)
 
-        if batch_entries >= max_batch_entries:
-            for field, values in batch.items():
-                local_db.executemany(
-                    "insert into inverted_index values(?, ?, ?)",
-                    (
-                        (field, value, doc_ids.serialize())
-                        for value, doc_ids in sorted(values.items())
-                    ),
-                )
+            if batch_entries >= max_batch_entries:
+                for field, values in batch.items():
+                    local_db.executemany(
+                        "insert into inverted_index values(?, ?, ?)",
+                        (
+                            (field, value, doc_ids.serialize())
+                            for value, doc_ids in sorted(values.items())
+                        ),
+                    )
+                batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
+                batch_entries = 0
+    else:
+        for field, values in batch.items():
+            local_db.executemany(
+                "insert into inverted_index values(?, ?, ?)",
+                (
+                    (field, value, doc_ids.serialize())
+                    for value, doc_ids in sorted(values.items())
+                ),
+            )
 
     # Once we have the pieces processed, we aggregate locally, then return
     # them to the main process via the output_queue for final aggregation
@@ -232,4 +257,13 @@ def _index_docs(corpus, input_queue, output_queue, max_batch_entries):
             output_queue.put((current_field, current_value, current_docs))
 
     output_queue.put(None)
-    output_queue.close()
+
+
+if __name__ == "__main__":
+    import corpus
+
+    c = corpus.PlainTextSqlite("test.db")
+
+    i = Index("index.db", c)
+
+    i.index()
