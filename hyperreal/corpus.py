@@ -10,10 +10,10 @@ shows concrete implementation examples.
 """
 
 import abc
-import sqlite3 as lite
 from typing import Protocol
 
 import utilities
+from db_utilities import connect_sqlite
 
 
 class Corpus(Protocol):
@@ -72,7 +72,7 @@ class TidyTweetCorpus(Corpus):
     def __init__(self, db_path):
 
         self.db_path = db_path
-        self.db = lite.connect(self.db_path, isolation_level=None)
+        self.db = connect_sqlite(self.db_path)
         self.db.row_factory = utilities.dict_factory
 
     def __getstate__(self):
@@ -117,7 +117,7 @@ class PlainTextSqlite(Corpus):
     def __init__(self, db_path):
 
         self.db_path = db_path
-        self.db = lite.connect(self.db_path, isolation_level=None)
+        self.db = connect_sqlite(self.db_path)
         self.db.execute("pragma journal_mode=WAL")
         self.db.execute(
             """

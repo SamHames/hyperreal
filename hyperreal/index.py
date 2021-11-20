@@ -8,17 +8,17 @@ import collections
 import heapq
 import multiprocessing as mp
 import os
-import sqlite3 as lite
 import tempfile
 
 from pyroaring import BitMap, FrozenBitMap
+from db_utilities import connect_sqlite
 
 
 class Index:
     def __init__(self, db_path, corpus, migrate=True):
         """ """
         self.db_path = db_path
-        self.db = lite.connect(self.db_path, isolation_level=None)
+        self.db = connect_sqlite(self.db_path)
         self.corpus = corpus
 
         for statement in """
@@ -42,7 +42,7 @@ class Index:
                     field text,
                     value,
                     docs_count integer not null,
-                    doc_ids blob not null,
+                    doc_ids roaring_bitmap not null,
                     primary key (field, value)
                 );
 
@@ -142,11 +142,13 @@ class Index:
                     w.join()
 
                 temp_dbs = [
-                    lite.connect(temp_db_path) for temp_db_path in temporary_db_paths
+                    connect_sqlite(temp_db_path) for temp_db_path in temporary_db_paths
                 ]
 
                 queries = [
-                    db.execute("select * from inverted_index order by field, value")
+                    db.execute(
+                        "select * from inverted_index_segment order by field, value"
+                    )
                     for db in temp_dbs
                 ]
 
@@ -167,13 +169,12 @@ class Index:
 
         self.db.execute("delete from inverted_index")
 
-        current_field, current_value, doc_ids = next(to_merge)
-        current_docs = BitMap.deserialize(doc_ids)
+        current_field, current_value, current_docs = next(to_merge)
 
         for field, value, doc_ids in to_merge:
             if (field, value) == (current_field, current_value):
                 # still aggregating this field...
-                current_docs |= BitMap.deserialize(doc_ids)
+                current_docs |= doc_ids
                 to_send = False
             else:
                 # We've hit something new...
@@ -184,11 +185,11 @@ class Index:
                         current_field,
                         current_value,
                         len(current_docs),
-                        current_docs.serialize(),
+                        current_docs,
                     ],
                 )
                 (current_field, current_value) = (field, value)
-                current_docs = BitMap.deserialize(doc_ids)
+                current_docs = doc_ids
                 to_send = True
         else:
             if to_send:
@@ -198,7 +199,7 @@ class Index:
                         current_field,
                         current_value,
                         len(current_docs),
-                        current_docs.serialize(),
+                        current_docs,
                     ],
                 )
 
@@ -207,7 +208,7 @@ class Index:
         self.db.execute("savepoint simple_index")
 
         self.db.execute(
-            "create temporary table inverted_index_segment(field, value, doc_ids)"
+            "create temporary table inverted_index_segment(field, value, doc_ids roaring_bitmap)"
         )
         self.db.execute("delete from doc_key")
 
@@ -218,10 +219,7 @@ class Index:
             for field, values in batch.items():
                 self.db.executemany(
                     "insert into inverted_index_segment values(?, ?, ?)",
-                    (
-                        (field, value, doc_ids.serialize())
-                        for value, doc_ids in values.items()
-                    ),
+                    ((field, value, doc_ids) for value, doc_ids in values.items()),
                 )
             return 0, collections.defaultdict(lambda: collections.defaultdict(BitMap))
 
@@ -256,16 +254,25 @@ class Index:
 
 def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
 
-    local_db = lite.connect(temp_db_path, isolation_level=None)
+    local_db = connect_sqlite(temp_db_path)
     # Note that we create an in memory database, but use a temporary table anyway,
     # because an in-memory database can't spill to disk.
     local_db.execute("begin")
-    local_db.execute("create table inverted_index(field, value, doc_ids)")
-
-    batch_entries = 0
+    local_db.execute(
+        "create table inverted_index_segment(field, value, doc_ids roaring_bitmap)"
+    )
 
     # This is {field: {value: doc_ids, value2: doc_ids}}
     batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
+    batch_entries = 0
+
+    def write_batch():
+        for field, values in batch.items():
+            local_db.executemany(
+                "insert into inverted_index_segment values(?, ?, ?)",
+                ((field, value, doc_ids) for value, doc_ids in values.items()),
+            )
+        return 0, collections.defaultdict(lambda: collections.defaultdict(BitMap))
 
     # Index documents until we go over max_batch_entries, then flush that
     # to a local temporary table.
@@ -284,38 +291,24 @@ def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
                     batch[field][value].add(doc_id)
 
             if batch_entries >= max_batch_entries:
-                for field, values in batch.items():
-                    local_db.executemany(
-                        "insert into inverted_index values(?, ?, ?)",
-                        (
-                            (field, value, doc_ids.serialize())
-                            for value, doc_ids in sorted(values.items())
-                        ),
-                    )
-                batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
-                batch_entries = 0
+                batch_entries, batch = write_batch()
 
     else:
-        for field, values in batch.items():
-            local_db.executemany(
-                "insert into inverted_index values(?, ?, ?)",
-                (
-                    (field, value, doc_ids.serialize())
-                    for value, doc_ids in values.items()
-                ),
-            )
+        batch_entries, batch = write_batch()
 
     # TODO: Merge the components locally first?
-    local_db.execute("create index field_values on inverted_index(field, value)")
+    local_db.execute(
+        "create index field_values on inverted_index_segment(field, value)"
+    )
     local_db.execute("commit")
 
 
 if __name__ == "__main__":
     import corpus
 
-    c = corpus.PlainTextSqlite("big.db")
+    c = corpus.PlainTextSqlite("test.db")
 
-    i = Index("big_index.db", c)
+    i = Index("index.db", c)
 
-    i.index(n_cpus=6)
+    i.index(n_cpus=12)
     # i.simple_index()
