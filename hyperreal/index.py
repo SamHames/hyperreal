@@ -11,15 +11,28 @@ import os
 import tempfile
 
 from pyroaring import BitMap, FrozenBitMap
+
 from db_utilities import connect_sqlite
 
 
 class Index:
-    def __init__(self, db_path, corpus, migrate=True):
-        """ """
+    def __init__(self, db_path, corpus=None, migrate=True, pool=None):
+        """
+
+        If corpus is not provided, it will be deserialised from the corpus
+        representation stored with the index.
+
+        The corpus state stored with the index is saved at the end of the
+        indexing process.
+
+        """
         self.db_path = db_path
         self.db = connect_sqlite(self.db_path)
         self.corpus = corpus
+
+        if not pool:
+            self.mp_context = mp.get_context("spawn")
+            self.pool = self.mp_context.Pool()
 
         for statement in """
             pragma synchronous=NORMAL;
@@ -46,6 +59,13 @@ class Index:
                     primary key (field, value)
                 );
 
+                create table if not exists field_summary (
+                    field text primary key,
+                    distinct_values integer,
+                    min_value,
+                    max_value
+                );
+
                 create index if not exists docs_counts on inverted_index(docs_count);
                 """
             )
@@ -55,7 +75,7 @@ class Index:
         raise_on_missing=True,
         n_cpus=None,
         batch_key_size=1000,
-        max_batch_entries=50_000_000,
+        max_batch_entries=10_000_000,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -69,18 +89,19 @@ class Index:
           threads
         - provide back pressure, to prevent too much state being held in main
           memory at the same time.
+        - a new database is created in the background, and overwrites the original
+          database file only at the end of the process.
 
         """
         self.db.execute("savepoint reindex")
 
         n_cpus = n_cpus or mp.cpu_count()
 
-        mp_context = mp.get_context("spawn")
-        manager = mp_context.Manager()
+        manager = self.mp_context.Manager()
 
-        # Note the size limit here - this means we won't materialise too many
-        # key objects in memory.
-        in_queue = manager.Queue(n_cpus * 10)
+        # Note the size limit here, to provide backpressure and avoid
+        # materialising keys too far in advance of the worker processes.
+        process_queue = manager.Queue(n_cpus * 3)
 
         try:
             # We're still inside a transaction here, so processes reading from
@@ -102,22 +123,18 @@ class Index:
                     os.path.join(tempdir, str(i)) for i in range(n_cpus)
                 ]
 
-                # Start all of the worker processes.
-                workers = [
-                    mp_context.Process(
-                        target=_index_docs,
-                        args=(
-                            self.corpus,
-                            in_queue,
-                            temp_db_path,
-                            max_batch_entries,
-                        ),
+                # Dispatch all of the worker processes
+                worker_args = [
+                    (
+                        self.corpus,
+                        process_queue,
+                        temp_db_path,
+                        max_batch_entries,
                     )
                     for temp_db_path in temporary_db_paths
                 ]
 
-                for w in workers:
-                    w.start()
+                results = self.pool.starmap_async(_index_docs, worker_args)
 
                 for doc_key in doc_keys:
 
@@ -127,22 +144,19 @@ class Index:
                     batch_size += 1
 
                     if batch_size >= batch_key_size:
-                        in_queue.put((batch_doc_ids, batch_doc_keys))
+                        process_queue.put((batch_doc_ids, batch_doc_keys))
                         batch_doc_ids = []
                         batch_doc_keys = []
                         batch_size = 0
                 else:
                     if batch_doc_ids:
-                        in_queue.put((batch_doc_ids, batch_doc_keys))
+                        process_queue.put((batch_doc_ids, batch_doc_keys))
 
-                for w in workers:
-                    in_queue.put(None)
-
-                for w in workers:
-                    w.join()
+                for _ in range(n_cpus):
+                    process_queue.put(None)
 
                 temp_dbs = [
-                    connect_sqlite(temp_db_path) for temp_db_path in temporary_db_paths
+                    connect_sqlite(temp_db_path) for temp_db_path in results.get()
                 ]
 
                 queries = [
@@ -203,7 +217,22 @@ class Index:
                     ],
                 )
 
-    def simple_index(self, max_batch_entries=200_000_000):
+        # Write the field summary
+        self.db.execute("delete from field_summary")
+        self.db.execute(
+            """
+            insert into field_summary
+            select
+                field,
+                count(*) as distinct_values,
+                min(value) as min_value,
+                max(value) as max_value
+            from inverted_index
+            group by field
+            """
+        )
+
+    def simple_index(self, max_batch_entries=10_000_000):
 
         self.db.execute("savepoint simple_index")
 
@@ -301,6 +330,9 @@ def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
         "create index field_values on inverted_index_segment(field, value)"
     )
     local_db.execute("commit")
+    local_db.close()
+
+    return temp_db_path
 
 
 if __name__ == "__main__":
@@ -310,5 +342,5 @@ if __name__ == "__main__":
 
     i = Index("index.db", c)
 
-    i.index(n_cpus=12)
+    i.index(n_cpus=6)
     # i.simple_index()
