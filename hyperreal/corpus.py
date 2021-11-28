@@ -25,6 +25,8 @@ class Corpus(Protocol):
     - Designed to enable downstream concurrent computing on those small batches.
     """
 
+    CORPUS_TYPE: str
+
     @abc.abstractmethod
     def docs(self, doc_keys=None, raise_on_missing=True):
         """
@@ -60,6 +62,19 @@ class Corpus(Protocol):
 
         """
         pass
+
+    # @abc.abstractmethod
+    # def serialize(self):
+    #     pass
+
+    # @classmethod
+    # @abc.abstractmethod
+    # def deserialize(self, state):
+    #     pass
+
+    # @abc.abstractmethod
+    # def close(self):
+    #     pass
 
     def __getitem__(self, doc_key):
         return self.docs([doc_key], raise_on_missing=True)
