@@ -336,9 +336,9 @@ def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
 
 
 if __name__ == "__main__":
-    import corpus
+    from hyperreal.corpus import builtin
 
-    c = corpus.PlainTextSqlite("test.db")
+    c = builtin.PlainTextSqliteCorpus("test.db")
 
     i = Index("index.db", c)
 

@@ -10,13 +10,14 @@ shows concrete implementation examples.
 """
 
 import abc
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-import utilities
-from db_utilities import connect_sqlite
+import hyperreal.utilities
+from hyperreal.db_utilities import connect_sqlite
 
 
-class Corpus(Protocol):
+@runtime_checkable
+class BaseCorpus(Protocol):
     """
     - provides access to documents, and describes how to index them.
     - needs to be picklable and safely enable concurrent read access
@@ -83,7 +84,10 @@ class Corpus(Protocol):
         return self.docs(doc_keys=None)
 
 
-class TidyTweetCorpus(Corpus):
+class TidyTweetCorpus(BaseCorpus):
+
+    CORPUS_TYPE = "TidyTweetCorpus"
+
     def __init__(self, db_path):
 
         self.db_path = db_path
@@ -124,11 +128,11 @@ class TidyTweetCorpus(Corpus):
         return {
             "author_id": [doc["author_id"]],
             "created_at": [doc["created_at"]],
-            "text": utilities.social_media_tokens(doc["text"]),
+            "text": hyperreal.utilities.social_media_tokens(doc["text"]),
         }
 
 
-class PlainTextSqlite(Corpus):
+class PlainTextSqliteCorpus(BaseCorpus):
     def __init__(self, db_path):
 
         self.db_path = db_path
@@ -182,5 +186,5 @@ class PlainTextSqlite(Corpus):
 
     def index(self, doc):
         return {
-            "text": utilities.tokens(doc),
+            "text": hyperreal.utilities.tokens(doc),
         }
