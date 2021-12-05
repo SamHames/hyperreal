@@ -16,7 +16,7 @@ from db_utilities import connect_sqlite
 
 
 class Index:
-    def __init__(self, db_path, corpus=None, migrate=True, pool=None):
+    def __init__(self, db_path, corpus, migrate=True, pool=None):
         """
 
         If corpus is not provided, it will be deserialised from the corpus
@@ -36,7 +36,6 @@ class Index:
 
         for statement in """
             pragma synchronous=NORMAL;
-            pragma foreign_keys=ON;
             pragma journal_mode=WAL;
             """.split(
             ";"
@@ -67,8 +66,22 @@ class Index:
                 );
 
                 create index if not exists docs_counts on inverted_index(docs_count);
+
                 """
             )
+
+    def __getstate__(self):
+        return self.db_path, self.corpus
+
+    def __setstate__(self, args):
+        self.__init__(*args, migrate=False, pool=1)
+
+    def __getitem__(self, key):
+        return list(
+            self.db.execute(
+                "select doc_ids from inverted_index where (field, value) = (?, ?)", key
+            )
+        )[0][0]
 
     def index(
         self,
@@ -280,6 +293,16 @@ class Index:
 
         self.db.execute("release simple_index")
 
+    def features(self, min_docs=1):
+        """
+        Return an iterator of all field/value pairs with more than `min_docs` documents matching.
+
+        """
+        return self.db.execute(
+            "select field, value, docs_count from inverted_index where docs_count >= ?",
+            [min_docs],
+        )
+
 
 def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
 
@@ -343,4 +366,5 @@ if __name__ == "__main__":
     i = Index("index.db", c)
 
     i.index(n_cpus=6)
+    print(type(i[("text", "the")]))
     # i.simple_index()
