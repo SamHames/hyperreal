@@ -16,14 +16,14 @@ import tempfile
 
 from pyroaring import BitMap, FrozenBitMap
 
-from db_utilities import connect_sqlite
+from hyperreal import extensions, db_utilities
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 class Index:
-    def __init__(self, db_path, corpus, pool=None):
+    def __init__(self, db_path, corpus=None, pool=None):
         """
 
         If corpus is not provided, it will be deserialised from the corpus
@@ -34,9 +34,17 @@ class Index:
 
         """
         self.db_path = db_path
-        self.db = connect_sqlite(self.db_path)
-        self.corpus = corpus
+        self.db = db_utilities.connect_sqlite(self.db_path)
 
+        if corpus:
+            self.corpus = corpus
+            self.save_corpus()
+        else:
+            self.load_corpus()
+
+        # TODO: Move the pool constructor outside the init - pass the pool
+        # to the specific functions that need it (ie, those that actually
+        # need to use multiprocessing.
         if not pool:
             self.mp_context = mp.get_context("spawn")
             self.pool = self.mp_context.Pool()
@@ -55,6 +63,12 @@ class Index:
         if db_version < CURRENT_SCHEMA_VERSION:
             self.db.executescript(
                 """
+                create table if not exists corpus_data (
+                    id integer primary key,
+                    corpus_type text,
+                    data
+                );
+
                 create table if not exists doc_key (
                     doc_id integer primary key,
                     doc_key unique
@@ -132,6 +146,7 @@ class Index:
                         where cluster_id = old.cluster_id;
                     end;
 
+                pragma user_version = 2;
                 """
             )
         elif db_version > CURRENT_SCHEMA_VERSION:
@@ -139,11 +154,31 @@ class Index:
                 "Index database schema version is too new for this version."
             )
 
+    def load_corpus(self):
+        self.db.execute("savepoint load_corpus")
+
+        corpus_type, data = list(
+            self.db.execute("select corpus_type, data from corpus_data where id = 0")
+        )[0]
+
+        self.corpus = extensions.registry[corpus_type].deserialize(data)
+        self.db.execute("release load_corpus")
+
+    def save_corpus(self):
+        self.db.execute("savepoint save_corpus")
+
+        self.db.execute(
+            "replace into corpus_data values(0, ?, ?)",
+            (self.corpus.CORPUS_TYPE, self.corpus.serialize()),
+        )
+
+        self.db.execute("release save_corpus")
+
     def __getstate__(self):
-        return self.db_path, self.corpus
+        return self.db_path
 
     def __setstate__(self, args):
-        self.__init__(*args, pool=1)
+        self.__init__(args, pool=1)
 
     def __getitem__(self, key):
         return list(
@@ -230,6 +265,7 @@ class Index:
                         batch_doc_ids = []
                         batch_doc_keys = []
                         batch_size = 0
+
                 else:
                     if batch_doc_ids:
                         process_queue.put((batch_doc_ids, batch_doc_keys))
@@ -238,7 +274,8 @@ class Index:
                     process_queue.put(None)
 
                 temp_dbs = [
-                    connect_sqlite(temp_db_path) for temp_db_path in results.get()
+                    db_utilities.connect_sqlite(temp_db_path)
+                    for temp_db_path in results.get()
                 ]
 
                 queries = [
@@ -251,6 +288,8 @@ class Index:
                 to_merge = heapq.merge(*queries)
 
                 self.__write_merged_segments(to_merge)
+
+                self.save_corpus()
 
         except Exception:
             self.db.execute("rollback to reindex")
@@ -541,7 +580,7 @@ class Index:
 
 def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
 
-    local_db = connect_sqlite(temp_db_path)
+    local_db = db_utilities.connect_sqlite(temp_db_path)
     # Note that we create an in memory database, but use a temporary table anyway,
     # because an in-memory database can't spill to disk.
     local_db.execute("begin")
@@ -692,11 +731,10 @@ def measure_features_to_feature_group(
 if __name__ == "__main__":
     from hyperreal import corpus
 
-    c = corpus.PlainTextSqliteCorpus("test.db")
+    # c = corpus.PlainTextSqliteCorpus("test.db")
 
-    i = Index("index.db", c)
-
-    # i.index(n_cpus=6)
+    i = Index("index.db", corpus=None)
+    # i.index(n_cpus=12)
 
     i.initialise_clusters(64, min_docs=5)
     i.refine_clusters(iterations=3)

@@ -14,12 +14,12 @@ here.
 import importlib
 import pkgutil
 
-from hyperreal.corpus.builtin import BaseCorpus
+from hyperreal.corpus import PlainTextSqliteCorpus
 
 
 def load_registry():
 
-    registry = {"corpus": {}}
+    registry = {PlainTextSqliteCorpus.CORPUS_TYPE: PlainTextSqliteCorpus}
 
     extension_candidates = {
         name: importlib.import_module(name)
@@ -32,7 +32,7 @@ def load_registry():
             corpus_classes = module.HYPERREAL_CORPUS
             for corpus_class in corpus_classes:
                 if isinstance(corpus_class, BaseCorpus):
-                    registry["corpus"][corpus_class.CORPUS_TYPE] = corpus_class
+                    registry[corpus_class.CORPUS_TYPE] = corpus_class
         except AttributeError:
             # TODO: log this
             pass
