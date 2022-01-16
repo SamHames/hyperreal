@@ -29,15 +29,11 @@ class BaseCorpus(Protocol):
     CORPUS_TYPE: str
 
     @abc.abstractmethod
-    def docs(self, doc_keys=None, raise_on_missing=True):
+    def docs(self, doc_keys=None):
         """
         Return an iterator of key-document pairs matching the given keys.
 
         If doc_keys is None, all documents will be iterated over.
-
-        If a key is passed that isn't present, the default behaviour is to
-        raise a KeyError, however in some applications it is advantageous to
-        skip that.
 
         """
         pass
@@ -64,18 +60,14 @@ class BaseCorpus(Protocol):
         """
         pass
 
-    # @abc.abstractmethod
-    # def serialize(self):
-    #     pass
+    @abc.abstractmethod
+    def serialize(self):
+        pass
 
-    # @classmethod
-    # @abc.abstractmethod
-    # def deserialize(self, state):
-    #     pass
-
-    # @abc.abstractmethod
-    # def close(self):
-    #     pass
+    @classmethod
+    @abc.abstractmethod
+    def deserialize(cls, state):
+        pass
 
     def __getitem__(self, doc_key):
         return self.docs([doc_key], raise_on_missing=True)
@@ -133,6 +125,9 @@ class TidyTweetCorpus(BaseCorpus):
 
 
 class PlainTextSqliteCorpus(BaseCorpus):
+
+    CORPUS_TYPE = "PlainTextSqliteCorpus"
+
     def __init__(self, db_path):
 
         self.db_path = db_path
@@ -152,6 +147,13 @@ class PlainTextSqliteCorpus(BaseCorpus):
 
     def __setstate__(self, db_path):
         self.__init__(db_path)
+
+    def serialize(self):
+        return self.db_path
+
+    @classmethod
+    def deserialize(cls, data):
+        return cls(data)
 
     def add_texts(self, texts):
         self.db.execute("savepoint add_texts")
