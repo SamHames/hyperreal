@@ -353,6 +353,29 @@ class Index:
             """
         )
 
+    def convert_query_to_keys(self, query):
+        """Generate the doc_keys one by one for the given query."""
+        self.db.execute("savepoint get_doc_keys")
+
+        for doc_id in query:
+            yield list(
+                self.db.execute(
+                    "select doc_key from doc_key where doc_id = ?", [doc_id]
+                )
+            )[0][0]
+
+        self.db.execute("release get_doc_keys")
+
+    def get_docs(self, query):
+        """Retrieve the documents matching the given query set."""
+        self.db.execute("savepoint get_docs")
+
+        doc_keys = self.convert_query_to_keys(query)
+
+        self.corpus.docs(doc_keys=doc_keys)
+
+        self.db.execute("release get_docs")
+
     def initialise_clusters(self, n_clusters, min_docs=1):
 
         self.db.execute("savepoint initialise")
