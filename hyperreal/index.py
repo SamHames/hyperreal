@@ -36,12 +36,6 @@ class Index:
         self.db_path = db_path
         self.db = db_utilities.connect_sqlite(self.db_path)
 
-        if corpus:
-            self.corpus = corpus
-            self.save_corpus()
-        else:
-            self.load_corpus()
-
         # TODO: Move the pool constructor outside the init - pass the pool
         # to the specific functions that need it (ie, those that actually
         # need to use multiprocessing.
@@ -153,6 +147,12 @@ class Index:
             raise ValueError(
                 "Index database schema version is too new for this version."
             )
+
+        if corpus:
+            self.corpus = corpus
+            self.save_corpus()
+        else:
+            self.load_corpus()
 
     def load_corpus(self):
         self.db.execute("savepoint load_corpus")
@@ -754,10 +754,8 @@ def measure_features_to_feature_group(
 if __name__ == "__main__":
     from hyperreal import corpus
 
-    # c = corpus.PlainTextSqliteCorpus("test.db")
-
-    i = Index("index.db", corpus=None)
-    # i.index(n_cpus=12)
-
-    i.initialise_clusters(64, min_docs=5)
-    i.refine_clusters(iterations=3)
+    c = corpus.PlainTextSqliteCorpus("loco.db")
+    i = Index("loco_index.db", c)
+    i.index(n_cpus=16)
+    i.initialise_clusters(256, min_docs=5)
+    i.refine_clusters(iterations=10)
