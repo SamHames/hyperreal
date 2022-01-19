@@ -152,6 +152,10 @@ class Index:
         else:
             self.load_corpus()
 
+    def close(self):
+        self.corpus.close()
+        self.db.close()
+
     def load_corpus(self):
         self.db.execute("savepoint load_corpus")
 
@@ -743,6 +747,8 @@ def measure_features_to_feature_group(
         return_features.append(feature)
         result_delta[array_index] = delta
         array_index += 1
+
+    index.close()
 
     return group_key, return_features, result_delta, already_in, objective
 

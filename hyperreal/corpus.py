@@ -69,6 +69,9 @@ class BaseCorpus(Protocol):
     def deserialize(cls, state):
         pass
 
+    def close(self):
+        pass
+
     def __getitem__(self, doc_key):
         return self.docs([doc_key], raise_on_missing=True)
 
@@ -122,6 +125,9 @@ class TidyTweetCorpus(BaseCorpus):
             "created_at": [doc["created_at"]],
             "text": hyperreal.utilities.social_media_tokens(doc["text"]),
         }
+
+    def close(self):
+        self.db.close()
 
 
 class PlainTextSqliteCorpus(BaseCorpus):
@@ -190,3 +196,6 @@ class PlainTextSqliteCorpus(BaseCorpus):
         return {
             "text": hyperreal.utilities.tokens(doc),
         }
+
+    def close(self):
+        self.db.close()
