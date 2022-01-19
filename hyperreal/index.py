@@ -6,6 +6,7 @@ to document keys.
 
 import array
 import collections
+import concurrent.futures as cf
 import heapq
 import math
 import multiprocessing as mp
@@ -23,25 +24,22 @@ CURRENT_SCHEMA_VERSION = 2
 
 
 class Index:
-    def __init__(self, db_path, corpus=None, pool=None):
+    def __init__(self, db_path, corpus=None, pool=None, mp_context=None):
         """
 
         If corpus is not provided, it will be deserialised from the corpus
         representation stored with the index.
 
-        The corpus state stored with the index is saved at the end of the
-        indexing process.
+        A pool and mp_context objects may be provided to control concurrency
+        across different operations. If not provided, they will be initialised
+        to a spawn server
 
         """
         self.db_path = db_path
         self.db = db_utilities.connect_sqlite(self.db_path)
 
-        # TODO: Move the pool constructor outside the init - pass the pool
-        # to the specific functions that need it (ie, those that actually
-        # need to use multiprocessing.
-        if not pool:
-            self.mp_context = mp.get_context("spawn")
-            self.pool = self.mp_context.Pool()
+        self.mp_context = mp_context or mp.get_context("spawn")
+        self.pool = pool or cf.ProcessPoolExecutor(mp_context=self.mp_context)
 
         for statement in """
             pragma synchronous=NORMAL;
@@ -241,8 +239,9 @@ class Index:
                 ]
 
                 # Dispatch all of the worker processes
-                worker_args = [
-                    (
+                futures = [
+                    self.pool.submit(
+                        _index_docs,
                         self.corpus,
                         process_queue,
                         temp_db_path,
@@ -250,8 +249,6 @@ class Index:
                     )
                     for temp_db_path in temporary_db_paths
                 ]
-
-                results = self.pool.starmap_async(_index_docs, worker_args)
 
                 for doc_key in doc_keys:
 
@@ -274,8 +271,8 @@ class Index:
                     process_queue.put(None)
 
                 temp_dbs = [
-                    db_utilities.connect_sqlite(temp_db_path)
-                    for temp_db_path in results.get()
+                    db_utilities.connect_sqlite(f.result())
+                    for f in cf.as_completed(futures)
                 ]
 
                 queries = [
@@ -436,14 +433,13 @@ class Index:
             reverse=True,
         )
 
-        results = [
-            self.pool.apply_async(measure_features_to_feature_group, check)
-            for check in check_order
+        futures = [
+            self.pool.submit(measure_features_to_feature_group, *c) for c in check_order
         ]
 
-        for pending_result in results:
+        for f in cf.as_completed(futures):
 
-            result = pending_result.get()
+            result = f.result()
 
             if result is None:
                 continue
@@ -756,6 +752,11 @@ if __name__ == "__main__":
 
     c = corpus.PlainTextSqliteCorpus("loco.db")
     i = Index("loco_index.db", c)
+    print("indexing")
     i.index(n_cpus=16)
+
+    print("initialising")
     i.initialise_clusters(256, min_docs=5)
+
+    print("refining")
     i.refine_clusters(iterations=10)
