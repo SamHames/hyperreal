@@ -197,11 +197,41 @@ class Index:
         self.db.execute("release save_corpus")
 
     def __getitem__(self, key):
-        return list(
-            self.db.execute(
-                "select doc_ids from inverted_index where (field, value) = (?, ?)", key
+
+        if isinstance(key, slice):
+            self.db.execute("savepoint load_slice")
+            if key.step is not None and key.step != 1:
+                raise ValueError("Only stepsize of 1 is supported for slicing.")
+            if key.start is None or key.stop is None:
+                raise ValueError("Neither the start or end values can be None.")
+            if key.start[0] != key.stop[0]:
+                raise ValueError("Slicing is only supported on a single field.")
+
+            results = BitMap()
+
+            matching = self.db.execute(
+                """
+                select doc_ids
+                from inverted_index
+                where (field, value) >= (?, ?)
+                    and (field, value) < (?, ?)
+                """,
+                (*key.start, *key.stop),
             )
-        )[0][0]
+
+            for (q,) in matching:
+                results |= q
+
+            self.db.execute("release load_slice")
+            return results
+
+        else:
+            return list(
+                self.db.execute(
+                    "select doc_ids from inverted_index where (field, value) = (?, ?)",
+                    key,
+                )
+            )[0][0]
 
     def index(
         self,
@@ -371,25 +401,20 @@ class Index:
     def convert_query_to_keys(self, query):
         """Generate the doc_keys one by one for the given query."""
         self.db.execute("savepoint get_doc_keys")
-
         for doc_id in query:
-            yield list(
+            doc_key = list(
                 self.db.execute(
                     "select doc_key from doc_key where doc_id = ?", [doc_id]
                 )
             )[0][0]
 
+            yield doc_key
+
         self.db.execute("release get_doc_keys")
 
     def get_docs(self, query):
         """Retrieve the documents matching the given query set."""
-        self.db.execute("savepoint get_docs")
-
-        doc_keys = self.convert_query_to_keys(query)
-
-        self.corpus.docs(doc_keys=doc_keys)
-
-        self.db.execute("release get_docs")
+        return self.corpus.docs(doc_keys=self.convert_query_to_keys(query))
 
     def initialise_clusters(self, n_clusters, min_docs=1):
 
@@ -792,11 +817,16 @@ if __name__ == "__main__":
 
     c = corpus.PlainTextSqliteCorpus("loco.db")
     i = Index("loco_index.db", c)
-    print("indexing")
-    i.index(n_cpus=16)
 
-    print("initialising")
-    i.initialise_clusters(256, min_docs=5)
+    q = i[("text", "flat"):("text", "flb")]
+    print(len(q), len(i["text", "flat"]))
+    for d in i.get_docs(q):
+        print(d)
+    # print("indexing")
+    # i.index(n_cpus=16)
 
-    print("refining")
-    i.refine_clusters(iterations=10)
+    # print("initialising")
+    # i.initialise_clusters(256, min_docs=5)
+
+    # print("refining")
+    # i.refine_clusters(iterations=10)
