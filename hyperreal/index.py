@@ -12,6 +12,7 @@ import math
 import multiprocessing as mp
 import os
 import random
+import sqlite3
 import tempfile
 
 
@@ -20,6 +21,9 @@ from pyroaring import BitMap, FrozenBitMap
 from hyperreal import extensions, db_utilities
 
 
+# The application ID uses SQLite's pragma application_id to quickly identify index
+# databases from everything else.
+MAGIC_APPLICATION_ID = 715973853
 CURRENT_SCHEMA_VERSION = 2
 
 
@@ -32,7 +36,10 @@ class Index:
 
         A pool and mp_context objects may be provided to control concurrency
         across different operations. If not provided, they will be initialised
-        to a spawn server
+        to a spawn server.
+
+        Note that the index is structured so that db_path is the only necessary
+        state, and can always be reinitialised from just that path.
 
         """
         self.db_path = db_path
@@ -139,6 +146,7 @@ class Index:
                     end;
 
                 pragma user_version = 2;
+                pragma application_id = 715973853;
                 """
             )
         elif db_version > CURRENT_SCHEMA_VERSION:
@@ -151,6 +159,18 @@ class Index:
             self.save_corpus()
         else:
             self.load_corpus()
+
+    @classmethod
+    def is_index_db(cls, db_path):
+        """Returns True if a db exists at db_path and is an index db."""
+        db = db_utilities.connect_sqlite(db_path)
+        try:
+            db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            return (
+                list(db.execute("pragma application_id"))[0][0] == MAGIC_APPLICATION_ID
+            )
+        except sqlite3.OperationalError:
+            return False
 
     def close(self):
         self.corpus.close()
@@ -175,12 +195,6 @@ class Index:
         )
 
         self.db.execute("release save_corpus")
-
-    def __getstate__(self):
-        return self.db_path
-
-    def __setstate__(self, args):
-        self.__init__(args, pool=1)
 
     def __getitem__(self, key):
         return list(
@@ -402,6 +416,24 @@ class Index:
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]
 
+    def cluster_features(self, cluster_id):
+        cluster_features = list(
+            self.db.execute(
+                """
+                select
+                    field,
+                    value,
+                    docs_count
+                from feature_cluster
+                where cluster_id = ?
+                order by docs_count desc
+                """,
+                [cluster_id],
+            )
+        )
+
+        return cluster_features
+
     def _calculate_assignments(self, group_features, group_checks, beam=1):
         """
         Determine the assignments of features to clusters given these features groups.
@@ -426,7 +458,7 @@ class Index:
         check_order = sorted(
             (
                 (
-                    self,
+                    self.db_path,
                     group_key,
                     features,
                     group_checks[group_key],
@@ -656,7 +688,7 @@ def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
 
 
 def measure_features_to_feature_group(
-    index, group_key, feature_group, comparison_features
+    index_db_path, group_key, feature_group, comparison_features
 ):
     """
     Measure the objective for moving the given subset of features into the
@@ -666,6 +698,8 @@ def measure_features_to_feature_group(
     measures the improvement if each of comparison features is added in turn.
 
     """
+
+    index = Index(index_db_path)
 
     if not feature_group:
         return None
