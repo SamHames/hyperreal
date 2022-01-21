@@ -9,6 +9,7 @@ The server consists of the following components:
 
 """
 import argparse
+import os
 
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, PlainTextResponse
@@ -30,14 +31,10 @@ async def cluster(request):
         request.path_params["cluster_id"]
     )
 
-    print(request.query_params)
-    print(request.query_params["value"])
-    print(await request.form())
-
     return PlainTextResponse("\n".join(", ".join(str(i) for i in f) for f in features))
 
 
-def create_app(index_path):
+def create_app():
 
     routes = [
         Route("/", endpoint=homepage),
@@ -46,9 +43,13 @@ def create_app(index_path):
 
     app = Starlette(debug=True, routes=routes)
 
-    app.state.index = index.Index(index_path)
+    if os.getenv("hyperreal_index_path"):
+        app.state.index = index.Index(os.getenv("hyperreal_index_path"))
 
     return app
+
+
+app = create_app()
 
 
 if __name__ == "__main__":
@@ -61,6 +62,7 @@ if __name__ == "__main__":
     if not index.Index.is_index_db(args.index_path):
         raise ValueError(f"{args.index_path} is not a valid index file.")
 
-    app = create_app(args.index_path)
+    os.environ["hyperreal_index_path"] = args.index_path
+    print(os.environ)
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
