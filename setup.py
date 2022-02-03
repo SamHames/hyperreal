@@ -3,14 +3,13 @@ from setuptools import setup, find_packages
 with open("./README.md", "r") as f:
     long_description = f.read()
 
-requires = ["regex", "pyroaring"]
+requires = ["regex", "pyroaring", "starlette", "jinja2"]
 
 setup(
     name="hyperreal",
     use_scm_version=True,
     long_description=long_description,
     packages=find_packages("hyperreal"),
-    # package_dir={"": "src"},
     url="https://gitlab.com/SamHames/hyperreal/",
     license="MIT",
     classifiers=[],
