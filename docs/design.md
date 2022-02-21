@@ -1,6 +1,21 @@
-# Architecture
+# Design of a Hyperreal
+
+Hyperreal is a software tool for computational interpretive analysis of collections of documents.
 
 ## Background
+
+
+## Other Software
+
+https://github.com/alicia-ziying-yang/conTEXT-explorer
+
+Python Libraries:
+
+- gensim
+
+Taguette
+
+Commercial Qualitative Analysis Tools
 
 ## Use Cases
 
