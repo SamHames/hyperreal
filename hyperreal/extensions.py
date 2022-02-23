@@ -14,12 +14,15 @@ here.
 import importlib
 import pkgutil
 
-from hyperreal.corpus import PlainTextSqliteCorpus
+from hyperreal.corpus import PlainTextSqliteCorpus, TidyTweetCorpus
 
 
 def load_registry():
 
-    registry = {PlainTextSqliteCorpus.CORPUS_TYPE: PlainTextSqliteCorpus}
+    registry = {
+        PlainTextSqliteCorpus.CORPUS_TYPE: PlainTextSqliteCorpus,
+        TidyTweetCorpus.CORPUS_TYPE: TidyTweetCorpus,
+    }
 
     extension_candidates = {
         name: importlib.import_module(name)

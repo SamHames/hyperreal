@@ -815,18 +815,14 @@ def measure_features_to_feature_group(
 if __name__ == "__main__":
     from hyperreal import corpus
 
-    c = corpus.PlainTextSqliteCorpus("loco.db")
-    i = Index("loco_index.db", c)
+    c = corpus.TidyTweetCorpus("crypto.db")
+    i = Index("crypto_index.db", c)
 
-    q = i[("text", "flat"):("text", "flb")]
-    print(len(q), len(i["text", "flat"]))
-    for d in i.get_docs(q):
-        print(d)
     # print("indexing")
     # i.index(n_cpus=16)
 
-    # print("initialising")
-    # i.initialise_clusters(256, min_docs=5)
+    print("initialising")
+    i.initialise_clusters(256, min_docs=5)
 
-    # print("refining")
-    # i.refine_clusters(iterations=10)
+    print("refining")
+    i.refine_clusters(iterations=10)

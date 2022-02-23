@@ -87,7 +87,6 @@ class TidyTweetCorpus(BaseCorpus):
 
         self.db_path = db_path
         self.db = connect_sqlite(self.db_path)
-        self.db.row_factory = utilities.dict_factory
 
     def __getstate__(self):
         return self.db_path
@@ -95,7 +94,14 @@ class TidyTweetCorpus(BaseCorpus):
     def __setstate__(self, db_path):
         self.__init__(db_path)
 
-    def docs(self, doc_keys=None, raise_on_missing=True):
+    def serialize(self):
+        return self.db_path
+
+    @classmethod
+    def deserialize(cls, data):
+        return cls(data)
+
+    def docs(self, doc_keys=None):
         self.db.execute("savepoint docs")
 
         try:
@@ -117,13 +123,18 @@ class TidyTweetCorpus(BaseCorpus):
             self.db.execute("release docs")
 
     def keys(self):
-        return self.db.execute("select distinct id from tweet")
+        return (
+            row[0]
+            for row in self.db.execute(
+                "select distinct id from tweet where directly_collected=1"
+            )
+        )
 
     def index(self, doc):
         return {
-            "author_id": [doc["author_id"]],
-            "created_at": [doc["created_at"]],
-            "text": hyperreal.utilities.social_media_tokens(doc["text"]),
+            "text": hyperreal.utilities.social_media_tokens(doc[0]),
+            "author_id": [doc[1]],
+            "created_at_utc_day": [doc[2][:10]],
         }
 
     def close(self):
