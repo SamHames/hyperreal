@@ -24,7 +24,94 @@ from hyperreal import extensions, db_utilities
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
+
+SCHEMA = f"""
+create table if not exists corpus_data (
+    id integer primary key,
+    corpus_type text,
+    data
+);
+
+create table if not exists doc_key (
+    doc_id integer primary key,
+    doc_key unique
+);
+
+create table if not exists inverted_index (
+    feature_id integer primary key,
+    field text not null,
+    value not null,
+    docs_count integer not null,
+    doc_ids roaring_bitmap not null,
+    unique (field, value)
+);
+
+create table if not exists field_summary (
+    field text primary key,
+    distinct_values integer,
+    min_value,
+    max_value
+);
+
+create index if not exists docs_counts on inverted_index(docs_count);
+
+-- The summary table for clusters, including the loose hierarchy
+-- and the materialised results of the query and document counts.
+create table if not exists cluster (
+    cluster_id integer primary key,
+    feature_count integer default 0
+);
+
+create table if not exists feature_cluster (
+    feature_id integer primary key references inverted_index(feature_id) on delete cascade,
+    cluster_id integer references cluster(cluster_id) on delete cascade,
+    docs_count integer
+);
+
+create index if not exists cluster_features on feature_cluster(
+    cluster_id,
+    docs_count
+);
+
+-- These triggers make sure that the cluster table always demonstrates
+-- which clusters are currently active, and allows the creation of tracking
+-- metadata for new clusters on insert of the features.
+create trigger if not exists ensure_cluster before insert on feature_cluster
+    begin
+        insert or ignore into cluster(cluster_id) values (new.cluster_id);
+        update cluster set
+            feature_count = feature_count + 1
+        where cluster_id = new.cluster_id;
+    end;
+
+create trigger if not exists delete_feature_cluster after delete on feature_cluster
+    begin
+        update cluster set
+            feature_count = feature_count - 1
+        where cluster_id = old.cluster_id;
+    end;
+
+create trigger if not exists ensure_cluster_update before update on feature_cluster
+    when old.cluster_id != new.cluster_id
+    begin
+        insert or ignore into cluster(cluster_id) values (new.cluster_id);
+    end;
+
+create trigger if not exists update_cluster_feature_counts after update on feature_cluster
+    when old.cluster_id != new.cluster_id
+    begin
+        update cluster set
+            feature_count = feature_count + 1
+        where cluster_id = new.cluster_id;
+        update cluster set
+            feature_count = feature_count - 1
+        where cluster_id = old.cluster_id;
+    end;
+
+pragma user_version = { CURRENT_SCHEMA_VERSION };
+pragma application_id = { MAGIC_APPLICATION_ID };
+"""
 
 
 class Index:
@@ -59,95 +146,11 @@ class Index:
 
         db_version = list(self.db.execute("pragma user_version"))[0][0]
 
-        if db_version < CURRENT_SCHEMA_VERSION:
-            self.db.executescript(
-                """
-                create table if not exists corpus_data (
-                    id integer primary key,
-                    corpus_type text,
-                    data
-                );
-
-                create table if not exists doc_key (
-                    doc_id integer primary key,
-                    doc_key unique
-                );
-
-                create table if not exists inverted_index (
-                    field text,
-                    value,
-                    docs_count integer not null,
-                    doc_ids roaring_bitmap not null,
-                    primary key (field, value)
-                );
-
-                create table if not exists field_summary (
-                    field text primary key,
-                    distinct_values integer,
-                    min_value,
-                    max_value
-                );
-
-                create index if not exists docs_counts on inverted_index(docs_count);
-
-                -- The summary table for clusters, including the loose hierarchy
-                -- and the materialised results of the query and document counts.
-                create table if not exists cluster (
-                    cluster_id integer primary key,
-                    feature_count integer default 0
-                );
-
-                create table if not exists feature_cluster (
-                    field text,
-                    value,
-                    cluster_id integer references cluster(cluster_id) on delete cascade,
-                    docs_count integer,
-                    primary key (field, value)
-                );
-
-                create index if not exists cluster_features on feature_cluster(
-                    cluster_id,
-                    docs_count
-                );
-
-                -- These triggers make sure that the cluster table always demonstrates
-                -- which clusters are currently active, and allows the creation of tracking
-                -- metadata for new clusters on insert of the features.
-                create trigger if not exists ensure_cluster before insert on feature_cluster
-                    begin
-                        insert or ignore into cluster(cluster_id) values (new.cluster_id);
-                        update cluster set
-                            feature_count = feature_count + 1
-                        where cluster_id = new.cluster_id;
-                    end;
-
-                create trigger if not exists delete_feature_cluster after delete on feature_cluster
-                    begin
-                        update cluster set
-                            feature_count = feature_count - 1
-                        where cluster_id = old.cluster_id;
-                    end;
-
-                create trigger if not exists ensure_cluster_update before update on feature_cluster
-                    when old.cluster_id != new.cluster_id
-                    begin
-                        insert or ignore into cluster(cluster_id) values (new.cluster_id);
-                    end;
-
-                create trigger if not exists update_cluster_feature_counts after update on feature_cluster
-                    when old.cluster_id != new.cluster_id
-                    begin
-                        update cluster set
-                            feature_count = feature_count + 1
-                        where cluster_id = new.cluster_id;
-                        update cluster set
-                            feature_count = feature_count - 1
-                        where cluster_id = old.cluster_id;
-                    end;
-
-                pragma user_version = 2;
-                pragma application_id = 715973853;
-                """
+        if db_version == 0:
+            self.db.executescript(SCHEMA)
+        elif db_version < CURRENT_SCHEMA_VERSION:
+            raise ValueError(
+                "Index database schema version is too old for this version."
             )
         elif db_version > CURRENT_SCHEMA_VERSION:
             raise ValueError(
@@ -197,8 +200,25 @@ class Index:
         self.db.execute("release save_corpus")
 
     def __getitem__(self, key):
+        """__getitem__ can either be a feature_id integer, or a (field, value) tuple."""
 
-        if isinstance(key, slice):
+        if isinstance(key, int):
+            return list(
+                self.db.execute(
+                    "select doc_ids from inverted_index where feature_id = ?",
+                    [key],
+                )
+            )[0][0]
+
+        elif isinstance(key, tuple):
+            return list(
+                self.db.execute(
+                    "select doc_ids from inverted_index where (field, value) = (?, ?)",
+                    key,
+                )
+            )[0][0]
+
+        elif isinstance(key, slice):
             self.db.execute("savepoint load_slice")
             if key.step is not None and key.step != 1:
                 raise ValueError("Only stepsize of 1 is supported for slicing.")
@@ -224,14 +244,6 @@ class Index:
 
             self.db.execute("release load_slice")
             return results
-
-        else:
-            return list(
-                self.db.execute(
-                    "select doc_ids from inverted_index where (field, value) = (?, ?)",
-                    key,
-                )
-            )[0][0]
 
     def index(
         self,
@@ -360,7 +372,7 @@ class Index:
                 # We've hit something new...
                 # output_queue.put((current_field, current_value, current_docs))
                 self.db.execute(
-                    "insert into inverted_index values(?, ?, ?, ?)",
+                    "insert into inverted_index values(null, ?, ?, ?, ?)",
                     [
                         current_field,
                         current_value,
@@ -374,7 +386,7 @@ class Index:
         else:
             if to_send:
                 self.db.execute(
-                    "insert into inverted_index values(?, ?, ?, ?)",
+                    "insert into inverted_index values(null, ?, ?, ?, ?)",
                     [
                         current_field,
                         current_value,
@@ -425,8 +437,7 @@ class Index:
             """
             insert into feature_cluster
                 select
-                    field,
-                    value,
+                    feature_id,
                     abs(random() % ?),
                     docs_count
                 from inverted_index
@@ -448,10 +459,13 @@ class Index:
                 select
                     field,
                     value,
-                    docs_count
-                from feature_cluster
+                    -- Note that docs_count is denormalised to allow
+                    -- a per cluster sorting of document count.
+                    fc.docs_count
+                from feature_cluster fc
+                inner join inverted_index ii using(feature_id)
                 where cluster_id = ?
-                order by docs_count desc
+                order by fc.docs_count desc
                 """,
                 [cluster_id],
             )
@@ -539,17 +553,16 @@ class Index:
         feature_cluster = dict()
         cluster_feature = collections.defaultdict(set)
 
-        for field, value, cluster_id in self.db.execute(
+        for feature_id, cluster_id in self.db.execute(
             """
             select
-                field,
-                value,
+                feature_id,
                 cluster_id
             from feature_cluster
             """
         ):
-            feature_cluster[(field, value)] = cluster_id
-            cluster_feature[cluster_id].add((field, value))
+            feature_cluster[feature_id] = cluster_id
+            cluster_feature[cluster_id].add(feature_id)
 
         features = list(feature_cluster)
         cluster_ids = list(cluster_feature)
@@ -650,9 +663,9 @@ class Index:
         # Serialise the actual results of the clustering!
         self.db.executemany(
             """
-            update feature_cluster set cluster_id = ? where (field, value) = (?, ?)
+            update feature_cluster set cluster_id = ?2 where feature_id = ?1
             """,
-            ((cluster_id, *feature) for feature, cluster_id in feature_cluster.items()),
+            feature_cluster.items(),
         )
 
         self.db.execute("release refine")
