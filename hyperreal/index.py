@@ -810,19 +810,3 @@ def measure_features_to_feature_group(
     index.close()
 
     return group_key, return_features, result_delta, already_in, objective
-
-
-if __name__ == "__main__":
-    from hyperreal import corpus
-
-    c = corpus.TidyTweetCorpus("crypto.db")
-    i = Index("crypto_index.db", c)
-
-    # print("indexing")
-    # i.index(n_cpus=16)
-
-    print("initialising")
-    i.initialise_clusters(256, min_docs=5)
-
-    print("refining")
-    i.refine_clusters(iterations=10)
