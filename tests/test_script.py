@@ -8,10 +8,10 @@ if __name__ == "__main__":
     i = index.Index("test_data/wiki_index.db", c)
 
     print("indexing")
-    i.index()
+    # i.index()
 
     print("initialising")
-    i.initialise_clusters(256, min_docs=10, fields=["category"])
+    i.initialise_clusters(256, min_docs=10)
 
     print("refining")
     i.refine_clusters(iterations=10)
