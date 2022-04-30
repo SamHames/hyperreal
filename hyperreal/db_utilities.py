@@ -9,7 +9,7 @@ def dict_factory(cursor, row):
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 
-def connect_sqlite(db_path):
+def connect_sqlite(db_path, row_factory=None):
     """
     A standardised initialisation approach for SQLite.
 
@@ -26,6 +26,9 @@ def connect_sqlite(db_path):
     conn = sqlite3.connect(
         db_path, detect_types=sqlite3.PARSE_DECLTYPES, isolation_level=None
     )
+
+    if row_factory:
+        conn.row_factory = row_factory
 
     return conn
 

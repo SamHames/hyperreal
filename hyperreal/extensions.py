@@ -14,7 +14,11 @@ here.
 import importlib
 import pkgutil
 
-from hyperreal.corpus import PlainTextSqliteCorpus, TidyTweetCorpus
+from hyperreal.corpus import (
+    PlainTextSqliteCorpus,
+    TidyTweetCorpus,
+    CirrusSearchWikiCorpus,
+)
 
 
 def load_registry():
@@ -22,6 +26,7 @@ def load_registry():
     registry = {
         PlainTextSqliteCorpus.CORPUS_TYPE: PlainTextSqliteCorpus,
         TidyTweetCorpus.CORPUS_TYPE: TidyTweetCorpus,
+        CirrusSearchWikiCorpus.CORPUS_TYPE: CirrusSearchWikiCorpus,
     }
 
     extension_candidates = {

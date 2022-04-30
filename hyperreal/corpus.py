@@ -13,7 +13,7 @@ import abc
 from typing import Protocol, runtime_checkable
 
 import hyperreal.utilities
-from hyperreal.db_utilities import connect_sqlite
+from hyperreal.db_utilities import connect_sqlite, dict_factory
 
 
 @runtime_checkable
@@ -206,6 +206,191 @@ class PlainTextSqliteCorpus(BaseCorpus):
     def index(self, doc):
         return {
             "text": hyperreal.utilities.tokens(doc),
+        }
+
+    def close(self):
+        self.db.close()
+
+
+class CirrusSearchWikiCorpus(BaseCorpus):
+
+    CORPUS_TYPE = "CirrusSearchWikiCorpus"
+
+    def __init__(self, db_path):
+
+        self.db_path = db_path
+        self.db = connect_sqlite(self.db_path, row_factory=dict_factory)
+
+    def ingest(self, filepath):
+
+        self.db.executescript(
+            """
+            pragma foreign_keys=1;
+            pragma journal_mode=OFF;
+
+            create table if not exists page(
+                id text primary key,
+                create_timestamp datetime,
+                timestamp datetime,
+                incoming_links integer,
+                popularity_score float,
+                text_bytes integer,
+                text text,
+                title text
+            );
+
+            create table if not exists page_external_link(
+                id integer references page(id) on delete cascade,
+                link text,
+                primary key (id, link)
+            );
+
+            create table if not exists page_category(
+                id integer references page(id) on delete cascade,
+                category text,
+                primary key (id, category)
+            );
+
+            create table if not exists page_outgoing_link(
+                id integer references page(id) on delete cascade,
+                link text,
+                primary key (id, link)
+            );
+            """
+        )
+
+        try:
+            self.db.execute("begin")
+
+            docs_added = 0
+            batch_docs_added = 0
+
+            with gzip.open(filepath, "rt") as f:
+
+                for page in f:
+                    page_id = json.loads(page)["index"]["_id"]
+                    content = defaultdict(lambda: None)
+                    content.update(json.loads(next(f)))
+                    content["id"] = page_id
+
+                    self.db.execute(
+                        """
+                        replace into page values(
+                            :id,
+                            :create_timestamp,
+                            :timestamp,
+                            :incoming_links,
+                            :popularity_score,
+                            :text_bytes,
+                            :text,
+                            :title
+                        )
+                        """,
+                        content,
+                    )
+
+                    if content["external_link"]:
+                        self.db.executemany(
+                            "insert into page_external_link values(?, ?)",
+                            ((page_id, link) for link in content["external_link"]),
+                        )
+
+                    if content["category"]:
+                        self.db.executemany(
+                            "insert into page_category values(?, ?)",
+                            ((page_id, link) for link in content["category"]),
+                        )
+
+                    if content["outgoing_link"]:
+                        self.db.executemany(
+                            "insert into page_outgoing_link values(?, ?)",
+                            ((page_id, link) for link in content["outgoing_link"]),
+                        )
+
+                    docs_added += 1
+                    batch_docs_added += 1
+
+                    if batch_docs_added == 100000:
+                        self.db.execute("commit")
+                        batch_docs_added = 0
+                        print(docs_added)
+                        self.db.execute("begin")
+
+            self.db.execute("commit")
+            self.db.execute("pragma journal_mode=WAL;")
+
+        except Exception as e:
+            self.db.execute("rollback")
+            print(page, content)
+            raise
+
+    def __getstate__(self):
+        return self.db_path
+
+    def __setstate__(self, db_path):
+        self.__init__(db_path)
+
+    def serialize(self):
+        return self.db_path
+
+    @classmethod
+    def deserialize(cls, data):
+        return cls(data)
+
+    def docs(self, doc_keys=None, raise_on_missing=True):
+        self.db.execute("savepoint docs")
+
+        try:
+            # Note that it's valid to pass an empty sequence of doc_keys,
+            # so we need to check sentinel explicitly.
+            if doc_keys is None:
+                doc_keys = self.keys()
+
+            for key in doc_keys:
+                doc = list(self.db.execute("select * from page where id = ?", [key]))[0]
+
+                doc["external_link"] = [
+                    r["link"]
+                    for r in list(
+                        self.db.execute(
+                            "select link from page_external_link where id = ?", [key]
+                        )
+                    )
+                ]
+
+                doc["category"] = [
+                    r["category"]
+                    for r in list(
+                        self.db.execute(
+                            "select category from page_category where id = ?", [key]
+                        )
+                    )
+                ]
+
+                doc["outgoing_link"] = [
+                    r["link"]
+                    for r in list(
+                        self.db.execute(
+                            "select link from page_outgoing_link where id = ?", [key]
+                        )
+                    )
+                ]
+
+                yield key, doc
+
+        finally:
+            self.db.execute("release docs")
+
+    def keys(self):
+        return (r["id"] for r in self.db.execute("select id from page"))
+
+    def index(self, doc):
+        return {
+            "text": hyperreal.utilities.tokens(doc.get("text", "")),
+            "title": hyperreal.utilities.tokens(doc.get("title", "")),
+            "external_link": doc.get("external_link", []),
+            "category": doc.get("category", []),
+            "outgoing_link": doc.get("outgoing_link", []),
         }
 
     def close(self):
