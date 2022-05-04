@@ -172,11 +172,15 @@ class PlainTextSqliteCorpus(BaseCorpus):
     def deserialize(cls, data):
         return cls(data)
 
-    def add_texts(self, texts):
+    def replace_docs(self, texts):
+        """Replace the existing documents with texts."""
         self.db.execute("savepoint add_texts")
+
+        self.db.execute("delete from doc")
         self.db.executemany(
             "insert or ignore into doc(text) values(?)", ([t] for t in texts)
         )
+
         self.db.execute("release add_texts")
 
     def docs(self, doc_keys=None, raise_on_missing=True):

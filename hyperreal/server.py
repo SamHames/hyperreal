@@ -69,18 +69,3 @@ def create_app():
 
 
 app = create_app()
-
-
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("index_path", help="Which index to serve.")
-
-    args = parser.parse_args()
-
-    if not index.Index.is_index_db(args.index_path):
-        raise ValueError(f"{args.index_path} is not a valid index file.")
-
-    os.environ["hyperreal_index_path"] = args.index_path
-
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
