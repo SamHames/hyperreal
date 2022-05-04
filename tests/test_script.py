@@ -11,7 +11,7 @@ if __name__ == "__main__":
     # i.index()
 
     print("initialising")
-    i.initialise_clusters(256, min_docs=10)
+    i.initialise_clusters(144, min_docs=10)
 
     print("refining")
-    i.refine_clusters(iterations=10)
+    i.refine_clusters(iterations=5)
