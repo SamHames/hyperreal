@@ -46,8 +46,8 @@ def plaintext_corpus_create(text_file, corpus_db):
 
     with open(text_file, "r") as f:
 
-        # The only documents we drop are empty strings.
-        docs = (line for line in f if line)
+        # The only documents we drop are lines that are only whitespace.
+        docs = (line for line in f if line.strip())
         doc_corpus.replace_docs(docs)
 
 
