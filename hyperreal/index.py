@@ -473,24 +473,17 @@ class Index:
 
         return cluster_features
 
-    def _calculate_assignments(self, group_features, group_checks, beam=1):
+    def _calculate_assignments(self, group_features, group_checks):
         """
         Determine the assignments of features to clusters given these features groups.
 
         This is a building block of the various iterations of refinement operations.
-
-        Keeps a heap of assignments, so that applications can do more sophisticated beam
-        searches if necessary.
 
         group_features: a mapping of group_keys to lists of features in that group.
         group_checks: a mapping of group keys to the features to be check against
             that group.
 
         """
-
-        futures = set()
-        assignments = dict()
-        total_objective = 0
 
         # Dispatch the comparisons that involve the most features first, as they will
         # likely take the longest.
@@ -512,6 +505,9 @@ class Index:
             self.pool.submit(measure_features_to_feature_group, *c) for c in check_order
         ]
 
+        total_objective = 0
+        assignments = collections.defaultdict(lambda: (-math.inf, -1))
+
         for f in cf.as_completed(futures):
 
             result = f.result()
@@ -525,15 +521,7 @@ class Index:
 
             for feature, delta in zip(check_features, delta):
 
-                try:
-                    heapq.heappushpop(
-                        assignments[feature], (delta, random.random(), group_key)
-                    )
-                except KeyError:
-                    assignments[feature] = [(-math.inf, -1)] * beam
-                    heapq.heappushpop(
-                        assignments[feature], (delta, random.random(), group_key)
-                    )
+                assignments[feature] = max(assignments[feature], (delta, group_key))
 
         return assignments, total_objective
 
@@ -626,14 +614,13 @@ class Index:
                 # Convert the group tests into individual cluster tests
                 cluster_tests = collections.defaultdict(set)
 
-                for feature, check_keys in batch_assignments.items():
+                for feature, (_, check_keys) in batch_assignments.items():
                     # Test against the current cluster
                     cluster_tests[feature_cluster[feature]].add(feature)
 
                     # Test against each of the clusters in the best batches
-                    for _, _, group_key in check_keys:
-                        for cluster_id in group_key:
-                            cluster_tests[cluster_id].add(feature)
+                    for cluster_id in check_keys:
+                        cluster_tests[cluster_id].add(feature)
 
                 previous_objective = total_objective
 
@@ -645,9 +632,7 @@ class Index:
                 # Unpack the beam search to assign to the nearest cluster
                 # Note on the last iteration, the assignments will be used
                 # to track the nearest neighbours for other uses.
-                for feature, best_clusters in assignments.items():
-
-                    delta, _, cluster_id = best_clusters[0]
+                for feature, (delta, cluster_id) in assignments.items():
 
                     cluster_feature[feature_cluster[feature]].discard(feature)
                     cluster_feature[cluster_id].add(feature)
