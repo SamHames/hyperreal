@@ -157,11 +157,20 @@ class Index:
                 "Index database schema version is too new for this version."
             )
 
+        # Lazy load corpus objects as many index operations don't require the
+        # corpus at all.
+        self._corpus = None
+
         if corpus:
-            self.corpus = corpus
+            self._corpus = corpus
             self.save_corpus()
-        else:
-            self.load_corpus()
+
+    @property
+    def corpus(self):
+        if self._corpus is None:
+            self._corpus = self.load_corpus()
+
+        return _corpus
 
     @classmethod
     def is_index_db(cls, db_path):
@@ -176,7 +185,10 @@ class Index:
             return False
 
     def close(self):
-        self.corpus.close()
+
+        if self._corpus:
+            self._corpus.close()
+
         self.db.close()
 
     def load_corpus(self):
