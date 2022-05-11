@@ -1,12 +1,6 @@
 import regex
 
 
-def dict_factory(cursor, row):
-    # Based on the Python standard library docs:
-    # https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.row_factory
-    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
-
-
 word_tokenizer = regex.compile(
     # Note this handles 'quoted' words a little weirdly: 'orange' is tokenised
     # as ["orange", "'"] I'd prefer to tokenise this as p"'", "orange", "'"]
