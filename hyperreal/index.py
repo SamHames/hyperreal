@@ -170,7 +170,7 @@ class Index:
         if self._corpus is None:
             self._corpus = self.load_corpus()
 
-        return _corpus
+        return self._corpus
 
     @classmethod
     def is_index_db(cls, db_path):
