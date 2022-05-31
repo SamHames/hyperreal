@@ -147,6 +147,9 @@ class Index:
         db_version = list(self.db.execute("pragma user_version"))[0][0]
 
         if db_version == 0:
+            # TODO: should actually check if anything exists in this database,
+            # and only create tables when it's both version 0 and an empty
+            # database.
             self.db.executescript(SCHEMA)
         elif db_version < CURRENT_SCHEMA_VERSION:
             raise ValueError(
@@ -445,6 +448,7 @@ class Index:
         self.db.execute("savepoint initialise")
 
         self.db.execute("delete from feature_cluster")
+        self.db.execute("delete from cluster")
         self.db.execute(
             """
             insert into feature_cluster
@@ -464,10 +468,24 @@ class Index:
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]
 
-    def cluster_features(self, cluster_id):
+    def top_cluster_features(self, top_k=10):
+        """Return the top_k features according to the number of matching documents."""
+
+        self.db.execute("savepoint top_cluster_features")
+
+        clusters = {
+            cluster_id: self.cluster_features(cluster_id, limit=top_k)
+            for cluster_id in self.cluster_ids
+        }
+
+        self.db.execute("release top_cluster_features")
+
+        return clusters
+
+    def cluster_features(self, cluster_id, limit=2**62):
         cluster_features = list(
             self.db.execute(
-                """
+                f"""
                 select
                     field,
                     value,
@@ -478,8 +496,9 @@ class Index:
                 inner join inverted_index ii using(feature_id)
                 where cluster_id = ?
                 order by fc.docs_count desc
+                limit ?
                 """,
-                [cluster_id],
+                [cluster_id, limit],
             )
         )
 

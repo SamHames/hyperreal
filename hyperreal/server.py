@@ -16,27 +16,40 @@ import argparse
 import os
 from urllib.parse import parse_qsl
 
+from jinja2 import PackageLoader, Environment, select_autoescape
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, PlainTextResponse
 from starlette.staticfiles import StaticFiles
 from starlette.routing import Route
-from starlette.templating import Jinja2Templates
+
 import uvicorn
 
 from hyperreal import index
 
 
+templates = Environment(
+    loader=PackageLoader("hyperreal"), autoescape=select_autoescape()
+)
+
+
 async def homepage(request):
-    return PlainTextResponse("hello")
+
+    template = templates.get_template("index.html")
+
+    clusters = request.app.state.index.top_cluster_features()
+
+    return HTMLResponse(template.render(clusters=clusters))
 
 
 async def cluster(request):
+
+    template = templates.get_template("cluster.html")
 
     features = request.app.state.index.cluster_features(
         request.path_params["cluster_id"]
     )
 
-    return PlainTextResponse("\n".join(", ".join(str(i) for i in f) for f in features))
+    return HTMLResponse(template.render(features=features))
 
 
 async def query(request):
