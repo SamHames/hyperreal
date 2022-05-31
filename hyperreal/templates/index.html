@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Feature Clustering{% endblock %}
+
+{% block content %}
+<h1>Feature Clustering</h1>
+<ul>
+    {% for cluster_id, features in clusters.items() %}
+    <li>
+        <ul>
+            <a href="/cluster/{{ cluster_id }}">Cluster {{ cluster_id }}</a>
+            {% for feature, value, count in features %}
+            <li>{{ feature }}: {{ value }} ({{ count }})</li>
+            {% endfor %}
+        </ul>
+    </li>
+    {% endfor %}
+</ul>
+{% endblock %}

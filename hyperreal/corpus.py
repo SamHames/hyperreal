@@ -10,6 +10,9 @@ shows concrete implementation examples.
 """
 
 import abc
+from collections import defaultdict
+import gzip
+import json
 from typing import Protocol, runtime_checkable
 
 import hyperreal.utilities
@@ -79,14 +82,24 @@ class BaseCorpus(Protocol):
         return self.docs(doc_keys=None)
 
 
-class TidyTweetCorpus(BaseCorpus):
-
-    CORPUS_TYPE = "TidyTweetCorpus"
-
+class SqliteBackedCorpus(BaseCorpus):
     def __init__(self, db_path):
+        """
+        A helper class for creating corpuses backed by SQLite databases.
+
+        This handles some basic things like saving the database path and ensuring
+        that the corpus object is picklable for multiprocessing.
+
+        You will still need to:
+
+        - Add the CORPUS_TYPE class attribute
+        - Define the docs, keys and index methods
+
+        """
 
         self.db_path = db_path
         self.db = connect_sqlite(self.db_path)
+        self.db.execute("pragma journal_mode=WAL")
 
     def __getstate__(self):
         return self.db_path
@@ -100,6 +113,14 @@ class TidyTweetCorpus(BaseCorpus):
     @classmethod
     def deserialize(cls, data):
         return cls(data)
+
+    def close(self):
+        self.db.close()
+
+
+class TidyTweetCorpus(SqliteBackedCorpus):
+
+    CORPUS_TYPE = "TidyTweetCorpus"
 
     def docs(self, doc_keys=None):
         self.db.execute("savepoint docs")
@@ -137,27 +158,10 @@ class TidyTweetCorpus(BaseCorpus):
             "created_at_utc_day": [doc[2][:10]],
         }
 
-    def close(self):
-        self.db.close()
 
-
-class PlainTextSqliteCorpus(BaseCorpus):
+class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
-
-    def __init__(self, db_path):
-
-        self.db_path = db_path
-        self.db = connect_sqlite(self.db_path)
-        self.db.execute("pragma journal_mode=WAL")
-        self.db.execute(
-            """
-            create table if not exists doc(
-                doc_id integer primary key,
-                text
-            )
-            """
-        )
 
     def __getstate__(self):
         return self.db_path
@@ -175,6 +179,16 @@ class PlainTextSqliteCorpus(BaseCorpus):
     def replace_docs(self, texts):
         """Replace the existing documents with texts."""
         self.db.execute("savepoint add_texts")
+
+        self.db.execute("drop table if exists doc")
+        self.db.execute(
+            """
+            create table doc(
+                doc_id integer primary key,
+                text not null
+            )
+            """
+        )
 
         self.db.execute("delete from doc")
         self.db.executemany(
@@ -212,25 +226,16 @@ class PlainTextSqliteCorpus(BaseCorpus):
             "text": hyperreal.utilities.tokens(doc),
         }
 
-    def close(self):
-        self.db.close()
 
-
-class CirrusSearchWikiCorpus(BaseCorpus):
+class CirrusSearchWikiCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "CirrusSearchWikiCorpus"
-
-    def __init__(self, db_path):
-
-        self.db_path = db_path
-        self.db = connect_sqlite(self.db_path, row_factory=dict_factory)
 
     def ingest(self, filepath):
 
         self.db.executescript(
             """
             pragma foreign_keys=1;
-            pragma journal_mode=OFF;
 
             create table if not exists page(
                 id text primary key,
@@ -321,25 +326,11 @@ class CirrusSearchWikiCorpus(BaseCorpus):
                         self.db.execute("begin")
 
             self.db.execute("commit")
-            self.db.execute("pragma journal_mode=WAL;")
 
         except Exception as e:
             self.db.execute("rollback")
             print(page, content)
             raise
-
-    def __getstate__(self):
-        return self.db_path
-
-    def __setstate__(self, db_path):
-        self.__init__(db_path)
-
-    def serialize(self):
-        return self.db_path
-
-    @classmethod
-    def deserialize(cls, data):
-        return cls(data)
 
     def docs(self, doc_keys=None, raise_on_missing=True):
         self.db.execute("savepoint docs")
@@ -396,6 +387,3 @@ class CirrusSearchWikiCorpus(BaseCorpus):
             "category": doc.get("category", []),
             "outgoing_link": doc.get("outgoing_link", []),
         }
-
-    def close(self):
-        self.db.close()

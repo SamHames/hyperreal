@@ -3,7 +3,15 @@ from setuptools import setup, find_packages
 with open("./README.md", "r") as f:
     long_description = f.read()
 
-requires = ["regex", "pyroaring", "starlette", "jinja2", "click"]
+requires = [
+    "click>=8.1.0",
+    "jinja2>=3.1.0",
+    "pyroaring>=0.3.3",
+    "regex>=2022.4.24",
+    "starlette>=0.20.0",
+    "uvicorn>=0.17.0",
+]
+
 
 setup(
     name="hyperreal",
