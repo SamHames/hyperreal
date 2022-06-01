@@ -363,6 +363,9 @@ class Index:
 
                 self.save_corpus()
 
+                for db in temp_dbs:
+                    db.close()
+
         except Exception:
             self.db.execute("rollback to reindex")
             raise
@@ -690,8 +693,6 @@ class Index:
 def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
-    # Note that we create an in memory database, but use a temporary table anyway,
-    # because an in-memory database can't spill to disk.
     local_db.execute("begin")
     local_db.execute(
         "create table inverted_index_segment(field, value, doc_ids roaring_bitmap)"
