@@ -147,10 +147,18 @@ class Index:
         db_version = list(self.db.execute("pragma user_version"))[0][0]
 
         if db_version == 0:
-            # TODO: should actually check if anything exists in this database,
-            # and only create tables when it's both version 0 and an empty
-            # database.
-            self.db.executescript(SCHEMA)
+            # Check that this is a database with no tables, and error if not - don't
+            # want to create these tables on top of an unrelated database.
+            table_count = list(self.db.execute("select count(*) from sqlite_master"))[
+                0
+            ][0]
+
+            if table_count > 0:
+                raise ValueError(
+                    f"{self.db_path} is not empty, and cannot be used as an index."
+                )
+            else:
+                self.db.executescript(SCHEMA)
         elif db_version < CURRENT_SCHEMA_VERSION:
             raise ValueError(
                 "Index database schema version is too old for this version."
