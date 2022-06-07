@@ -475,6 +475,31 @@ class Index:
 
         self.db.execute("release initialise")
 
+    def delete_clusters(self, cluster_ids):
+        """Delete the specified clusters."""
+        self.db.execute("savepoint delete_clusters")
+        self.db.executemany(
+            "delete from cluster where cluster_id = ?", [[c] for c in cluster_ids]
+        )
+
+        self.db.execute("release delete_clusters")
+
+    def merge_clusters(self, cluster_ids):
+        """Merge all clusters into the first cluster_id in the provided list."""
+        self.db.execute("savepoint merge_clusters")
+
+        merge_cluster_id = cluster_id[0]
+
+        for cluster_id in merge_clusters[1:]:
+            self.db.execute(
+                "update feature_cluster set cluster_id=? where cluster_id=?",
+                [merge_cluster_id, cluster_id],
+            )
+
+        self.db.execute("release merge_clusters")
+
+        return merge_cluster_id
+
     @property
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]

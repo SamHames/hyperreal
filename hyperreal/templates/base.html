@@ -7,6 +7,32 @@
     <title>{% block title %}{% endblock %}</title>
     {% endblock %}
 
+    <style type="text/css">
+.cluster-list {
+    display: inline-block;
+    list-style-type: none;
+    margin: 0;
+    padding-left: 0;
+}
+
+.cluster-list li {
+    background: #eeeeee;
+    padding-left: 0;
+}
+.compact-cluster {
+    max-width: 40em;
+    margin: 1em;
+    padding: 0.5em;
+    padding-left: 0;
+}
+.compact-cluster li {
+    display: inline-block;
+    list-style-type: none;
+    margin: 0.25em 0.5em;
+    padding-left: 0;
+}
+    </style>
+
     {% block meta %}
     {% endblock %}
 </head>

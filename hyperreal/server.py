@@ -18,7 +18,7 @@ from urllib.parse import parse_qsl
 
 from jinja2 import PackageLoader, Environment, select_autoescape
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 from starlette.routing import Route
 
@@ -39,6 +39,18 @@ async def homepage(request):
     clusters = request.app.state.index.top_cluster_features()
 
     return HTMLResponse(template.render(clusters=clusters))
+
+
+async def edit_cluster(request):
+
+    data = await request.form()
+    method = data["method"]
+
+    if method == "delete":
+        cluster_id = int(data["cluster_id"])
+        request.app.state.index.delete_clusters([cluster_id])
+
+    return RedirectResponse(url="/", status_code=301)
 
 
 async def cluster(request):
@@ -69,6 +81,7 @@ def create_app():
 
     routes = [
         Route("/", endpoint=homepage),
+        Route("/cluster", endpoint=edit_cluster, methods=["post"]),
         Route("/cluster/{cluster_id:int}", endpoint=cluster),
         Route("/query", endpoint=query),
     ]
