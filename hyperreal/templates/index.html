@@ -10,7 +10,7 @@
     <li>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li>{{ field }}:<a href=/?feature_id={{ feature_id }}>{{ value }}</a><!-- ({{ score }}) --></li>
+            <li><a href=/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
             {% endfor %}
         </ul>
         <details>

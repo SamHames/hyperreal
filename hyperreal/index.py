@@ -504,7 +504,7 @@ class Index:
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]
 
-    def top_cluster_features(self, top_k=10):
+    def top_cluster_features(self, top_k=20):
         """Return the top_k features according to the number of matching documents."""
 
         self.db.execute("savepoint top_cluster_features")
@@ -522,7 +522,7 @@ class Index:
 
         return clusters
 
-    def pivot_clusters_by_query(self, query, top_k=10):
+    def pivot_clusters_by_query(self, query, top_k=20):
 
         self.db.execute("savepoint pivot_clusters_by_query")
 
