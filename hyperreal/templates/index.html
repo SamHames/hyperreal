@@ -3,25 +3,26 @@
 {% block title %}Feature Clustering{% endblock %}
 
 {% block content %}
-<h1>Feature Clustering</h1>
+<h1><a href="/">Feature Clustering</a></h1>
 
 <ul class="cluster-list">
-    {% for cluster_id, features in clusters.items() %}
+    {% for cluster_id, features in clusters %}
     <li>
         <ul class="compact-cluster">
-            {% for feature, value, count in features %}
-            <li>{{ feature }}: {{ value }} ({{ count }})</li>
+            {% for feature_id, field, value, score in features %}
+            <li>{{ field }}:<a href=/?feature_id={{ feature_id }}>{{ value }}</a><!-- ({{ score }}) --></li>
             {% endfor %}
-            <li><a href="/cluster/{{ cluster_id }}">View all</a></li>
-            <details>
-                <summary>Edit</summary>
-                <form method="post" action="/cluster/">
-                    <input type="hidden" name="method" value="delete">
-                    <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
-                    <button class="inline-button" type="submit">Delete 🗑️</button>
-                </form>
-            </details>
         </ul>
+        <details>
+            <summary>Edit</summary>
+            <form method="post" action="/cluster/">
+                <input type="hidden" name="method" value="delete">
+                <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
+                <button class="inline-button" type="submit">Delete 🗑️</button>
+            </form>
+        </details>
+        <a href="/cluster/{{ cluster_id }}">View all</a>
+        <a href="/?cluster_id={{ cluster_id }}">Pivot</a>
     </li>
     {% endfor %}
 </ul>

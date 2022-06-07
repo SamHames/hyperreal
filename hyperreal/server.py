@@ -36,7 +36,16 @@ async def homepage(request):
 
     template = templates.get_template("index.html")
 
-    clusters = request.app.state.index.top_cluster_features()
+    if "feature_id" in request.query_params:
+        query = request.app.state.index[int(request.query_params["feature_id"])]
+        clusters = request.app.state.index.pivot_clusters_by_query(query)
+    elif "cluster_id" in request.query_params:
+        query = request.app.state.index.cluster_docs(
+            int(request.query_params["cluster_id"])
+        )
+        clusters = request.app.state.index.pivot_clusters_by_query(query)
+    else:
+        clusters = request.app.state.index.top_cluster_features()
 
     return HTMLResponse(template.render(clusters=clusters))
 

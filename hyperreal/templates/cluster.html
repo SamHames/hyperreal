@@ -8,8 +8,8 @@
 <a href="/">Home</a>
 
 <ul>
-    {% for feature, value, count in features %}
-    <li>{{ feature }}: {{ value }} ({{ count }})</li>
+    {% for feature_id, field, value, count in features %}
+    <li>{{ field }}: {{ value }} ({{ count }})</li>
     {% endfor %}
 </ul>
 

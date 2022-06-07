@@ -509,12 +509,40 @@ class Index:
 
         self.db.execute("savepoint top_cluster_features")
 
-        clusters = {
-            cluster_id: self.cluster_features(cluster_id, limit=top_k)
-            for cluster_id in self.cluster_ids
-        }
+        clusters = sorted(
+            [
+                (cluster_id, self.cluster_features(cluster_id, limit=top_k))
+                for cluster_id in self.cluster_ids
+            ],
+            reverse=True,
+            key=lambda r: r[1][0][-1],
+        )
 
         self.db.execute("release top_cluster_features")
+
+        return clusters
+
+    def pivot_clusters_by_query(self, query, top_k=10):
+
+        self.db.execute("savepoint pivot_clusters_by_query")
+
+        work = [
+            (self.db_path, query, cluster_id, top_k) for cluster_id in self.cluster_ids
+        ]
+
+        # Calculate and filter out anything that has no matches at all with the query.
+        pivoted = (r for r in self.pool.map(_pivot_cluster_by_query, work) if r[1])
+
+        clusters = [
+            (r[0][1], r[1])
+            for r in sorted(
+                pivoted,
+                reverse=True,
+                key=lambda r: r[0],
+            )
+        ]
+
+        self.db.execute("release pivot_clusters_by_query")
 
         return clusters
 
@@ -523,6 +551,7 @@ class Index:
             self.db.execute(
                 f"""
                 select
+                    feature_id,
                     field,
                     value,
                     -- Note that docs_count is denormalised to allow
@@ -539,6 +568,31 @@ class Index:
         )
 
         return cluster_features
+
+    def cluster_docs(self, cluster_id):
+        """Return the bitset representing docs matching this cluster of features."""
+
+        self.db.execute("savepoint cluster_docs")
+        matching = BitMap()
+
+        features = self.db.execute(
+            """
+            select doc_ids 
+            from inverted_index 
+            where feature_id in (
+                select feature_id 
+                from feature_cluster
+                where cluster_id = ?
+            )
+            """,
+            [cluster_id],
+        )
+        for (doc_ids,) in features:
+            matching |= doc_ids
+
+        self.db.execute("release cluster_docs")
+
+        return matching
 
     def _calculate_assignments(self, group_features, group_checks):
         """
@@ -773,6 +827,85 @@ def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
     local_db.close()
 
     return temp_db_path
+
+
+def _pivot_cluster_by_query(args):
+
+    index_db_path, query, cluster_id, top_k = args
+    index = Index(index_db_path)
+
+    results = [(0, -1, "", "")] * top_k
+
+    q = len(query)
+
+    search_upper = index.db.execute(
+        """
+        select
+            feature_cluster.feature_id,
+            field,
+            value,
+            feature_cluster.docs_count,
+            doc_ids
+        from feature_cluster
+        inner join inverted_index using(feature_id)
+        where cluster_id = ?
+            and feature_cluster.docs_count >= ?
+        order by feature_cluster.docs_count
+        """,
+        [cluster_id, q],
+    )
+
+    for feature_id, field, value, docs_count, docs in search_upper:
+
+        # Early break if the length threshold can't be reached.
+        if q / docs_count <= results[0][0]:
+            break
+
+        heapq.heappushpop(
+            results, (query.jaccard_index(docs), feature_id, field, value)
+        )
+
+    search_upper = index.db.execute(
+        """
+        select
+            feature_cluster.feature_id,
+            field,
+            value,
+            feature_cluster.docs_count,
+            doc_ids
+        from feature_cluster
+        inner join inverted_index using(feature_id)
+        where cluster_id = ?
+            and feature_cluster.docs_count < ?
+        order by feature_cluster.docs_count desc
+        """,
+        [cluster_id, q],
+    )
+
+    for feature_id, field, value, docs_count, docs in search_upper:
+
+        # Early break if the length threshold can't be reached.
+        if docs_count / q <= results[0][0]:
+            break
+
+        heapq.heappushpop(
+            results, (query.jaccard_index(docs), feature_id, field, value)
+        )
+
+    results = sorted(
+        ((*r[1:], r[0]) for r in results if r[0] > 0), reverse=True, key=lambda r: r[3]
+    )
+
+    # Finally compute the similarity of the query with the composite object.
+    if results:
+        composite_query = BitMap.union(*[index[r[0]] for r in results])
+        similarity = query.jaccard_index(composite_query)
+    else:
+        similarity = 0
+
+    index.close()
+
+    return (similarity, cluster_id), results
 
 
 def measure_features_to_feature_group(
