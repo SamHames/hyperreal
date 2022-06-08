@@ -3,16 +3,16 @@
 {% block title %}Feature Clustering{% endblock %}
 
 {% block content %}
-<h1><a href="/">Feature Clustering</a></h1>
-
 <ul class="cluster-list">
     {% for cluster_id, features in clusters %}
     <li>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li><a href=/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
+            <li><a class="feature-link" href=/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
             {% endfor %}
+            <a href="/cluster/{{ cluster_id }}">...</a>
         </ul>
+        <a href="/?cluster_id={{ cluster_id }}">Pivot</a>
         <details>
             <summary>Edit</summary>
             <form method="post" action="/cluster/">
@@ -21,8 +21,6 @@
                 <button class="inline-button" type="submit">Delete 🗑️</button>
             </form>
         </details>
-        <a href="/cluster/{{ cluster_id }}">View all</a>
-        <a href="/?cluster_id={{ cluster_id }}">Pivot</a>
     </li>
     {% endfor %}
 </ul>

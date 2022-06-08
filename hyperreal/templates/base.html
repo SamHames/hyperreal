@@ -11,12 +11,15 @@
 .cluster-list {
     display: inline-block;
     list-style-type: none;
-    margin: 0;
     padding-left: 0;
 }
 
+.cluster-list > li {
+    margin: 1em;
+    box-shadow: 0 0 0.2em 0.1em gray;
+}
+
 .cluster-list li {
-    background: #eeeeee;
     padding-left: 0;
 }
 .compact-cluster {
@@ -32,7 +35,7 @@
     padding-left: 0;
 }
 
-a { text-decoration: none; }
+.feature-link { text-decoration: none; }
 
     </style>
 
@@ -42,8 +45,14 @@ a { text-decoration: none; }
 
 <body class="with-sidebar" up-main>
     <header>
+        <h1>Feature Clustering</h1>
+        <nav>
+        <ul>
+            <li><a href="/">Home</a></li>
         {% block nav %}
         {% endblock %}
+        </ul>
+        </nav>
     </header>
     <main>{% block content %}{% endblock %}</main>
 </body>

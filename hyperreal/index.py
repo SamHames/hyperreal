@@ -522,13 +522,12 @@ class Index:
 
         return clusters
 
-    def pivot_clusters_by_query(self, query, top_k=20):
+    def pivot_clusters_by_query(self, query, cluster_ids=None, top_k=20):
 
         self.db.execute("savepoint pivot_clusters_by_query")
 
-        work = [
-            (self.db_path, query, cluster_id, top_k) for cluster_id in self.cluster_ids
-        ]
+        cluster_ids = cluster_ids or self.cluster_ids
+        work = [(self.db_path, query, cluster_id, top_k) for cluster_id in cluster_ids]
 
         # Calculate and filter out anything that has no matches at all with the query.
         pivoted = (r for r in self.pool.map(_pivot_cluster_by_query, work) if r[1])

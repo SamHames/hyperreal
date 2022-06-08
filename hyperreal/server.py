@@ -66,11 +66,25 @@ async def cluster(request):
 
     template = templates.get_template("cluster.html")
 
-    features = request.app.state.index.cluster_features(
-        request.path_params["cluster_id"]
-    )
+    cluster_id = int(request.path_params["cluster_id"])
 
-    return HTMLResponse(template.render(features=features))
+    features = request.app.state.index.cluster_features(cluster_id)
+    n_features = len(features)
+
+    if "feature_id" in request.query_params:
+        query = request.app.state.index[int(request.query_params["feature_id"])]
+        features = request.app.state.index.pivot_clusters_by_query(
+            query, cluster_ids=[cluster_id], top_k=n_features
+        )[0][-1]
+    elif "cluster_id" in request.query_params:
+        query = request.app.state.index.cluster_docs(
+            int(request.query_params["cluster_id"])
+        )
+        features = request.app.state.index.pivot_clusters_by_query(
+            query, cluster_ids=[cluster_id], top_k=n_features
+        )[0][-1]
+
+    return HTMLResponse(template.render(cluster_id=cluster_id, features=features))
 
 
 async def query(request):
