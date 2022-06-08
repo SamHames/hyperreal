@@ -36,7 +36,7 @@ if __name__ == "__main__":
     tree = ET.parse(xml_file)
     root = tree.getroot()
 
-    with open(output_file, "w") as outfile:
+    with open(output_file, "w", encoding="UTF-8") as outfile:
         csvout = csv.writer(outfile, quoting=csv.QUOTE_ALL)
         for row in root:
             body = row.attrib["Body"]
