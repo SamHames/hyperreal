@@ -10,6 +10,7 @@ requires = [
     "regex>=2022.4.24",
     "starlette>=0.20.0",
     "uvicorn>=0.17.0",
+    "python-multipart",
 ]
 
 
