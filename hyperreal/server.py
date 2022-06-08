@@ -1,15 +1,17 @@
 """
-Server components.
+WARNING: EXPERIMENTAL!
+
+This is all prototype only right now, you shouldn't rely on any part of this
+to be stable or consistent.
 
 The server consists of the following components:
 
-1. Starlette as the web frontend.
-2. A process pool for CPU intensive work that needs to return interactively.
-3. A background queue and process for long running tasks.
+1. Starlette as the web frontend, and a single loaded index on the app
+state. This is the index specified on the command line to run the
+webserver on top.
 
 The whole web frontend runs as a single process: all CPU intensive tasks
-need to be defered to the process pool. Long running tasks need to be
-deferred to the background pool.
+need to be defered to the process pool.
 
 """
 import argparse
@@ -50,16 +52,37 @@ async def homepage(request):
     return HTMLResponse(template.render(clusters=clusters))
 
 
-async def edit_cluster(request):
+async def edit_clusters(request):
 
     data = await request.form()
     method = data["method"]
 
     if method == "delete":
-        cluster_id = int(data["cluster_id"])
-        request.app.state.index.delete_clusters([cluster_id])
+        cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
+        request.app.state.index.delete_clusters(cluster_ids)
 
-    return RedirectResponse(url="/", status_code=301)
+    return RedirectResponse(url="/", status_code=303)
+
+
+async def delete_features(request):
+
+    data = await request.form()
+    return_url = f"/cluster/{data['cluster_id']}" if "cluster_id" in data else "/"
+
+    feature_ids = [int(feature_id) for feature_id in data.getlist("feature_id")]
+    request.app.state.index.delete_features(feature_ids)
+
+    return RedirectResponse(url=return_url, status_code=303)
+
+
+async def create_cluster(request):
+
+    data = await request.form()
+
+    feature_ids = [int(feature_id) for feature_id in data.getlist("feature_id")]
+    new_cluster_id = request.app.state.index.create_cluster_from_features(feature_ids)
+
+    return RedirectResponse(url=f"/cluster/{new_cluster_id}", status_code=303)
 
 
 async def cluster(request):
@@ -104,8 +127,10 @@ def create_app():
 
     routes = [
         Route("/", endpoint=homepage),
-        Route("/cluster", endpoint=edit_cluster, methods=["post"]),
+        Route("/cluster", endpoint=edit_clusters, methods=["post"]),
         Route("/cluster/{cluster_id:int}", endpoint=cluster),
+        Route("/cluster/create", endpoint=create_cluster, methods=["post"]),
+        Route("/feature/delete", endpoint=delete_features, methods=["post"]),
         Route("/query", endpoint=query),
     ]
 

@@ -500,6 +500,45 @@ class Index:
 
         return merge_cluster_id
 
+    def delete_features(self, feature_ids):
+        """Delete the given features from the model."""
+        self.db.execute("savepoint delete_clusters")
+
+        self.db.executemany(
+            "delete from feature_cluster where feature_id=?",
+            [[f] for f in feature_ids],
+        )
+
+        self.db.execute("release delete_clusters")
+
+    def create_cluster_from_features(self, feature_ids):
+        """
+        Create a new cluster from the provided set of features.
+
+        LIMITATION: The feature must already exist in the model.
+
+        """
+        self.db.execute("savepoint create_clusters")
+
+        next_cluster_id = list(
+            self.db.execute(
+                """
+            select 
+                coalesce(max(cluster_id), 0) + 1 
+            from cluster
+            """
+            )
+        )[0][0]
+
+        self.db.executemany(
+            "update feature_cluster set cluster_id = ? where feature_id = ?",
+            [(next_cluster_id, f) for f in feature_ids],
+        )
+
+        self.db.execute("release create_clusters")
+
+        return next_cluster_id
+
     @property
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]
@@ -892,7 +931,7 @@ def _pivot_cluster_by_query(args):
         )
 
     results = sorted(
-        ((*r[1:], r[0]) for r in results if r[0] > 0), reverse=True, key=lambda r: r[3]
+        ((*r[1:], r[0]) for r in results if r[1] >= 0), reverse=True, key=lambda r: r[3]
     )
 
     # Finally compute the similarity of the query with the composite object.
