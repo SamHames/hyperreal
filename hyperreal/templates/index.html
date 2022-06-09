@@ -3,6 +3,24 @@
 {% block title %}Feature Clustering{% endblock %}
 
 {% block content %}
+<details>
+    <summary>Edit Clusters</summary>
+    <form method="post" action="/cluster/delete">
+        <label for="cluster_selection">Choose clusters:</label>
+        <select name="cluster_id" id="cluster_selection" multiple>
+            {% for cluster_id, features in clusters %}
+            <option value="{{ cluster_id }}">
+                {% for feature_id, field, value, count in features %}
+                {{ field }}: {{ value }}
+                {% endfor %}
+            </option>
+            {% endfor %}
+        </select>
+        <button type="submit">Delete Clusters 🗑️</button>
+        <button type="submit" formaction="/cluster/merge" method="post">Merge Clusters</button>
+    </form>
+</details>
+
 <ul class="cluster-list">
     {% for cluster_id, features in clusters %}
     <li>
@@ -15,8 +33,7 @@
         <a href="/?cluster_id={{ cluster_id }}">Pivot</a>
         <details>
             <summary>Edit</summary>
-            <form method="post" action="/cluster/">
-                <input type="hidden" name="method" value="delete">
+            <form method="post" action="/cluster/delete">
                 <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
                 <button class="inline-button" type="submit">Delete 🗑️</button>
             </form>

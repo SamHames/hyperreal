@@ -44,7 +44,7 @@ def plaintext_corpus_create(text_file, corpus_db):
 
     doc_corpus = hyperreal.corpus.PlainTextSqliteCorpus(corpus_db)
 
-    with open(text_file, "r", encoding='utf-8') as infile:
+    with open(text_file, "r", encoding="utf-8") as infile:
         f = csv.reader(infile)
         # The only documents we drop are lines that are only whitespace.
         docs = (line[0] for line in f if line and line[0].strip())

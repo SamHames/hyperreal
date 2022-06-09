@@ -52,16 +52,24 @@ async def homepage(request):
     return HTMLResponse(template.render(clusters=clusters))
 
 
-async def edit_clusters(request):
+async def delete_clusters(request):
 
     data = await request.form()
-    method = data["method"]
 
-    if method == "delete":
-        cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
-        request.app.state.index.delete_clusters(cluster_ids)
+    cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
+    request.app.state.index.delete_clusters(cluster_ids)
 
     return RedirectResponse(url="/", status_code=303)
+
+
+async def merge_clusters(request):
+
+    data = await request.form()
+
+    cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
+    new_cluster_id = request.app.state.index.merge_clusters(cluster_ids)
+
+    return RedirectResponse(url=f"/?cluster_id={new_cluster_id}", status_code=303)
 
 
 async def delete_features(request):
@@ -127,9 +135,10 @@ def create_app():
 
     routes = [
         Route("/", endpoint=homepage),
-        Route("/cluster", endpoint=edit_clusters, methods=["post"]),
-        Route("/cluster/{cluster_id:int}", endpoint=cluster),
         Route("/cluster/create", endpoint=create_cluster, methods=["post"]),
+        Route("/cluster/delete", endpoint=delete_clusters, methods=["post"]),
+        Route("/cluster/merge", endpoint=merge_clusters, methods=["post"]),
+        Route("/cluster/{cluster_id:int}", endpoint=cluster),
         Route("/feature/delete", endpoint=delete_features, methods=["post"]),
         Route("/query", endpoint=query),
     ]

@@ -24,7 +24,7 @@ from hyperreal import extensions, db_utilities
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 SCHEMA = f"""
 create table if not exists corpus_data (
@@ -90,6 +90,9 @@ create trigger if not exists delete_feature_cluster after delete on feature_clus
         update cluster set
             feature_count = feature_count - 1
         where cluster_id = old.cluster_id;
+        delete from cluster
+        where cluster_id = old.cluster_id
+            and feature_count = 0;
     end;
 
 create trigger if not exists ensure_cluster_update before update on feature_cluster
@@ -107,6 +110,9 @@ create trigger if not exists update_cluster_feature_counts after update on featu
         update cluster set
             feature_count = feature_count - 1
         where cluster_id = old.cluster_id;
+        delete from cluster
+        where cluster_id = old.cluster_id
+            and feature_count = 0;
     end;
 
 pragma user_version = { CURRENT_SCHEMA_VERSION };
@@ -488,9 +494,9 @@ class Index:
         """Merge all clusters into the first cluster_id in the provided list."""
         self.db.execute("savepoint merge_clusters")
 
-        merge_cluster_id = cluster_id[0]
+        merge_cluster_id = cluster_ids[0]
 
-        for cluster_id in merge_clusters[1:]:
+        for cluster_id in cluster_ids[1:]:
             self.db.execute(
                 "update feature_cluster set cluster_id=? where cluster_id=?",
                 [merge_cluster_id, cluster_id],
@@ -548,11 +554,13 @@ class Index:
 
         self.db.execute("savepoint top_cluster_features")
 
+        features = [
+            (cluster_id, self.cluster_features(cluster_id, limit=top_k))
+            for cluster_id in self.cluster_ids
+        ]
+
         clusters = sorted(
-            [
-                (cluster_id, self.cluster_features(cluster_id, limit=top_k))
-                for cluster_id in self.cluster_ids
-            ],
+            features,
             reverse=True,
             key=lambda r: r[1][0][-1],
         )
