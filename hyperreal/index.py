@@ -185,7 +185,7 @@ class Index:
     @property
     def corpus(self):
         if self._corpus is None:
-            self._corpus = self.load_corpus()
+            self.load_corpus()
 
         return self._corpus
 
@@ -215,7 +215,7 @@ class Index:
             self.db.execute("select corpus_type, data from corpus_data where id = 0")
         )[0]
 
-        self.corpus = extensions.registry[corpus_type].deserialize(data)
+        self._corpus = extensions.registry[corpus_type].deserialize(data)
         self.db.execute("release load_corpus")
 
     def save_corpus(self):
@@ -459,6 +459,22 @@ class Index:
     def get_docs(self, query):
         """Retrieve the documents matching the given query set."""
         return self.corpus.docs(doc_keys=self.convert_query_to_keys(query))
+
+    def get_rendered_docs(self, query, random_sample_size=None):
+        """
+        Return the rendered representation of the docs matching this query.
+
+        Optionally take a random sample of documents before rendering.
+        """
+
+        if random_sample_size is not None:
+            q = len(query)
+            if q > random_sample_size:
+                choice = random.sample(range(q), random_sample_size)
+                query = BitMap(query[i] for i in choice)
+
+        doc_keys = self.convert_query_to_keys(query)
+        return self.corpus.render_docs_html(doc_keys)
 
     def initialise_clusters(self, n_clusters, min_docs=1):
 

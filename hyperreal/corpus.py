@@ -213,6 +213,10 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
             "text": hyperreal.utilities.tokens(doc),
         }
 
+    def render_docs_html(self, doc_keys):
+        """Return the given documents as HTML."""
+        return list(self.docs(doc_keys=doc_keys))
+
 
 class CirrusSearchWikiCorpus(SqliteBackedCorpus):
 

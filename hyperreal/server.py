@@ -41,15 +41,29 @@ async def homepage(request):
     if "feature_id" in request.query_params:
         query = request.app.state.index[int(request.query_params["feature_id"])]
         clusters = request.app.state.index.pivot_clusters_by_query(query)
+        rendered_docs = request.app.state.index.get_rendered_docs(
+            query, random_sample_size=5
+        )
+        total_docs = len(query)
     elif "cluster_id" in request.query_params:
         query = request.app.state.index.cluster_docs(
             int(request.query_params["cluster_id"])
         )
         clusters = request.app.state.index.pivot_clusters_by_query(query)
+        rendered_docs = request.app.state.index.get_rendered_docs(
+            query, random_sample_size=5
+        )
+        total_docs = len(query)
     else:
         clusters = request.app.state.index.top_cluster_features()
+        rendered_docs = []
+        total_docs = 0
 
-    return HTMLResponse(template.render(clusters=clusters))
+    return HTMLResponse(
+        template.render(
+            clusters=clusters, total_docs=total_docs, rendered_docs=rendered_docs
+        )
+    )
 
 
 async def delete_clusters(request):
