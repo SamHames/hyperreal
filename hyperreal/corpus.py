@@ -76,7 +76,7 @@ class BaseCorpus(Protocol):
         pass
 
     def __getitem__(self, doc_key):
-        return self.docs([doc_key], raise_on_missing=True)
+        return self.docs([doc_key])
 
     def __iter__(self):
         return self.docs(doc_keys=None)
@@ -163,19 +163,6 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
 
-    def __getstate__(self):
-        return self.db_path
-
-    def __setstate__(self, db_path):
-        self.__init__(db_path)
-
-    def serialize(self):
-        return self.db_path
-
-    @classmethod
-    def deserialize(cls, data):
-        return cls(data)
-
     def replace_docs(self, texts):
         """Replace the existing documents with texts."""
         self.db.execute("savepoint add_texts")
@@ -197,7 +184,7 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
         self.db.execute("release add_texts")
 
-    def docs(self, doc_keys=None, raise_on_missing=True):
+    def docs(self, doc_keys=None):
         self.db.execute("savepoint docs")
 
         try:
@@ -332,7 +319,7 @@ class CirrusSearchWikiCorpus(SqliteBackedCorpus):
             print(page, content)
             raise
 
-    def docs(self, doc_keys=None, raise_on_missing=True):
+    def docs(self, doc_keys=None):
         self.db.execute("savepoint docs")
 
         try:
