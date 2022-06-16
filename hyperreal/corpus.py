@@ -185,9 +185,10 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         self.db.execute("release add_texts")
 
     def docs(self, doc_keys=None):
-        self.db.execute("savepoint docs")
 
         try:
+            self.db.execute("savepoint docs")
+
             # Note that it's valid to pass an empty sequence of doc_keys,
             # so we need to check sentinel explicitly.
             if doc_keys is None:
