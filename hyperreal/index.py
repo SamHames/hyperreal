@@ -7,6 +7,7 @@ to document keys.
 import array
 import collections
 import concurrent.futures as cf
+from functools import wraps
 import heapq
 import math
 import multiprocessing as mp
@@ -18,7 +19,7 @@ import tempfile
 
 from pyroaring import BitMap, FrozenBitMap
 
-from hyperreal import extensions, db_utilities
+from hyperreal import extensions, db_utilities, corpus
 
 
 # The application ID uses SQLite's pragma application_id to quickly identify index
@@ -27,12 +28,6 @@ MAGIC_APPLICATION_ID = 715973853
 CURRENT_SCHEMA_VERSION = 4
 
 SCHEMA = f"""
-create table if not exists corpus_data (
-    id integer primary key,
-    corpus_type text,
-    data
-);
-
 create table if not exists doc_key (
     doc_id integer primary key,
     doc_key unique
@@ -120,12 +115,29 @@ pragma application_id = { MAGIC_APPLICATION_ID };
 """
 
 
+def requires_corpus(func):
+    """
+    Mark method as requiring a corpus object.
+
+    Raises an AttributeError if no corpus object is present on this index.
+
+    """
+
+    @wraps(func)
+    def wrapper_func(self, *args, **kwargs):
+        if self.corpus is None:
+            raise AttributeError("A Corpus object is needed for this functionality.")
+
+        func(self, *args, **kwargs)
+
+    return wrapper_func
+
+
 class Index:
     def __init__(self, db_path, corpus=None, pool=None, mp_context=None):
         """
-
-        If corpus is not provided, it will be deserialised from the corpus
-        representation stored with the index.
+        The corpus object is optional - if not provided certain operations such
+        as retrieving or rendering documents won't be possible.
 
         A pool and mp_context objects may be provided to control concurrency
         across different operations. If not provided, they will be initialised
@@ -174,25 +186,11 @@ class Index:
                 "Index database schema version is too new for this version."
             )
 
-        # Lazy load corpus objects as many index operations don't require the
-        # corpus at all.
-        self._corpus = None
-
-        if corpus:
-            self._corpus = corpus
-            self.save_corpus()
-
-    @property
-    def corpus(self):
-        if self._corpus is None:
-            self.load_corpus()
-
-        return self._corpus
+        self.corpus = corpus
 
     @classmethod
     def is_index_db(cls, db_path):
         """Returns True if a db exists at db_path and is an index db."""
-        db = db_utilities.connect_sqlite(db_path)
         try:
             db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             return (
@@ -202,31 +200,7 @@ class Index:
             return False
 
     def close(self):
-
-        if self._corpus:
-            self._corpus.close()
-
         self.db.close()
-
-    def load_corpus(self):
-        self.db.execute("savepoint load_corpus")
-
-        corpus_type, data = list(
-            self.db.execute("select corpus_type, data from corpus_data where id = 0")
-        )[0]
-
-        self._corpus = extensions.registry[corpus_type].deserialize(data)
-        self.db.execute("release load_corpus")
-
-    def save_corpus(self):
-        self.db.execute("savepoint save_corpus")
-
-        self.db.execute(
-            "replace into corpus_data values(0, ?, ?)",
-            (self.corpus.CORPUS_TYPE, self.corpus.serialize()),
-        )
-
-        self.db.execute("release save_corpus")
 
     def __getitem__(self, key):
         """__getitem__ can either be a feature_id integer, or a (field, value) tuple."""
@@ -274,6 +248,7 @@ class Index:
             self.db.execute("release load_slice")
             return results
 
+    @requires_corpus
     def index(
         self,
         raise_on_missing=True,
@@ -375,8 +350,6 @@ class Index:
 
                 self.__write_merged_segments(to_merge)
 
-                self.save_corpus()
-
                 for db in temp_dbs:
                     db.close()
 
@@ -456,10 +429,12 @@ class Index:
 
         self.db.execute("release get_doc_keys")
 
+    @requires_corpus
     def get_docs(self, query):
         """Retrieve the documents matching the given query set."""
         return self.corpus.docs(doc_keys=self.convert_query_to_keys(query))
 
+    @requires_corpus
     def get_rendered_docs(self, query, random_sample_size=None):
         """
         Return the rendered representation of the docs matching this query.
@@ -710,13 +685,22 @@ class Index:
 
     def refine_clusters(
         self,
-        iterations=10,
-        sub_iterations=2,
+        iterations: int = 10,
+        sub_iterations: int = 2,
     ):
         """
         Attempt to improve the model clustering of the features for `iterations`.
 
         """
+
+        if iterations < 1:
+            raise ValueError(
+                f"You must specificy at least one iteration, provided '{iterations}'."
+            )
+        if sub_iterations < 1:
+            raise ValueError(
+                f"You must specificy at least one subiteration, provided '{sub_iterations}'."
+            )
 
         self.db.execute("savepoint refine")
 

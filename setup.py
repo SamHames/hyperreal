@@ -13,6 +13,8 @@ requires = [
     "python-multipart",
 ]
 
+extras = {"test": ["pytest", "black", "tox"]}
+
 
 setup(
     name="hyperreal",
@@ -30,7 +32,8 @@ setup(
     keywords="",
     install_requires=requires,
     setup_requires=["setuptools_scm"],
+    extras_require=extras,
     author="Sam Hames",
-    author_email="sam@hames.id.au",
+    author_email="s.hames@uq.edu.au",
     description="Hyperreal is a library and tool for intepretive text analytics.",
 )

@@ -14,6 +14,19 @@ To install the development version:
     
     `pip install -e .`
 
+## Running Tests
+
+We use pytest to run tests and tox to coordinate everything. Install the necessary packages and run the tests like so:
+
+```
+pip install -e .[test]
+# To run just the testsuite
+pytest
+# To run everything, including code formatting via black and generate coverage
+tox
+
+```
+
 # Usage
 
 ## Command Line
