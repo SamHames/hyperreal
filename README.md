@@ -47,9 +47,8 @@ hyperreal plaintext-corpus index corpus.db corpus_index.db
 # only include features present in 10 or more documents.
 hyperreal model corpus_index.db --min-docs 10 --clusters 128
 
-# Use the web interface to serve the results of that modelling (currently this
-# is very limited)
-hyperreal serve corpus_index.db
+# Use the web interface to serve the results of that modelling
+hyperreal plaintext-corpus serve corpus.db corpus_index.db
 
 ```
 
@@ -85,11 +84,26 @@ i.initialise_clusters(n_clusters=256, min_docs=100)
 i.refine_clusters(iterations=10)
 
 # Inspect the output of the model using the index instance (currently quite
-# limited). This will print the top 10 most frequent features in each cluster.
+# limited). This will print the top 10 most frequent features in each
+# cluster.
 for cluster_id in i.cluster_ids:
     cluster_features = i.cluster_features(cluster_id)
     for feature in cluster_features[:10]:
         print(feature)
+
+# Perform a boolean query on the corpus, looking for documents that contain
+# both apples AND oranges in the text field.
+q = i[('text', 'oranges')] & i[('text', 'oranges')]
+# Lookup all of the documents in the corpus that match this query.
+docs = i.get_docs(q)
+
+# 'Pivot' the features in the index with respect to all cluster in the model.
+#  This will show the top 10 features in each cluster that are similar to the
+#  query.
+i.pivot_clusters_by_query(query, top_k=10)
+
+# This will show the top 10 features for a selected set of cluster_ids.
+i.pivot_clusters_by_query(query, cluster_ids=[3,5,7], top_k=10)
 
 ```
 

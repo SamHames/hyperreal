@@ -98,8 +98,15 @@ class SqliteBackedCorpus(BaseCorpus):
         """
 
         self.db_path = db_path
-        self.db = connect_sqlite(self.db_path)
-        self.db.execute("pragma journal_mode=WAL")
+        self._db = None
+
+    @property
+    def db(self):
+        if self._db is None:
+            self._db = connect_sqlite(self.db_path)
+            self._db.execute("pragma journal_mode=WAL")
+
+        return self._db
 
     def __getstate__(self):
         return self.db_path
@@ -115,7 +122,8 @@ class SqliteBackedCorpus(BaseCorpus):
         return cls(data)
 
     def close(self):
-        self.db.close()
+        if self._db is not None:
+            self._db.close()
 
 
 class TidyTweetCorpus(SqliteBackedCorpus):

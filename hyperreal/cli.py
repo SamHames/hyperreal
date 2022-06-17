@@ -4,14 +4,16 @@ This module provides all of the CLI functionality for hyperreal.
 """
 
 import csv
+import concurrent.futures as cf
 import json
+import multiprocessing as mp
 import os
 
 import click
-import uvicorn
 
 import hyperreal.corpus
 import hyperreal.index
+import hyperreal.server
 
 
 # The main entry command is always hyperreal
@@ -69,6 +71,32 @@ def plaintext_corpus_index(corpus_db, index_db):
     doc_index.index()
 
 
+@plaintext_corpus.command(name="serve")
+@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
+@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
+def plaintext_corpus_serve(corpus_db, index_db):
+    """
+    Serve the given plaintext corpus and index via the webserver.
+
+    """
+
+    if not hyperreal.index.Index.is_index_db(index_db):
+        raise ValueError(f"{index_db} is not a valid index file.")
+
+    click.echo(f"Serving corpus '{corpus_db}'/ index '{index_db}'.")
+
+    mp_context = mp.get_context("spawn")
+    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+        index_server = hyperreal.server.SingleIndexServer(
+            index_db,
+            corpus_class=hyperreal.corpus.PlainTextSqliteCorpus,
+            corpus_args=[corpus_db],
+            pool=pool,
+            mp_context=mp_context,
+        )
+        hyperreal.server.launch_web_server(index_server)
+
+
 @cli.command()
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
 @click.option("--iterations", default=10)
@@ -85,10 +113,22 @@ def model(index_db, iterations, clusters, min_docs):
 @cli.command()
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
 def serve(index_db):
+    """
+    Serve the given index file.
+
+    Note that this method of serving will not provide access to the underlying
+    corpus of documents - this is useful for non-consumptive types of analysis.
+    If you want to view the underlying documents, see the serve subcommand for
+    the specific type of corpus you're interested in.
+
+    """
 
     if not hyperreal.index.Index.is_index_db(index_db):
         raise ValueError(f"{index_db} is not a valid index file.")
 
-    os.environ["hyperreal_index_path"] = index_db
-
-    uvicorn.run("hyperreal.server:app", host="0.0.0.0", port=8000, reload=True)
+    mp_context = mp.get_context("spawn")
+    with cf.ProcessPoolExecutor(mp_context=self.mp_context) as pool:
+        index_server = hyperreal.server.SingleIndexServer(
+            index_db, pool=pool, mp_context=mp_context
+        )
+        hyperreal.server.launch_web_server(index_server)

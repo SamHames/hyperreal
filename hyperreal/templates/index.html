@@ -5,7 +5,7 @@
 {% block content %}
 <details>
     <summary>Edit Clusters</summary>
-    <form method="post" action="/cluster/delete">
+    <form method="post" action="/index/{{ index_id }}/cluster/delete">
         <label for="cluster_selection">Choose clusters:</label>
         <select name="cluster_id" id="cluster_selection" multiple>
             {% for cluster_id, features in clusters %}
@@ -17,7 +17,7 @@
             {% endfor %}
         </select>
         <button type="submit">Delete Clusters 🗑️</button>
-        <button type="submit" formaction="/cluster/merge" method="post">Merge Clusters</button>
+        <button type="submit" formaction="/index/{{ index_id }}/cluster/merge" method="post">Merge Clusters</button>
     </form>
 </details>
 
@@ -27,11 +27,11 @@
     <li>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li><a class="feature-link" href=/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
+            <li><a class="feature-link" href=/index/{{ index_id }}/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
             {% endfor %}
-            <a href="/cluster/{{ cluster_id }}">...</a>
+            <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">...</a>
         </ul>
-        <a href="/?cluster_id={{ cluster_id }}">Pivot</a>
+        <a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot</a>
         <details>
             <summary>Edit</summary>
             <form method="post" action="/cluster/delete">
@@ -55,11 +55,11 @@
     <li>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li><a class="feature-link" href=/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
+            <li><a class="feature-link" href=/index/{{ index_id }}/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
             {% endfor %}
-            <a href="/cluster/{{ cluster_id }}">...</a>
+            <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">...</a>
         </ul>
-        <a href="/?cluster_id={{ cluster_id }}">Pivot</a>
+        <a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot</a>
         <details>
             <summary>Edit</summary>
             <form method="post" action="/cluster/delete">
