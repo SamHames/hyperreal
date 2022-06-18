@@ -6,7 +6,7 @@
 
 <details>
     <summary>Edit this cluster</summary>
-    <form method="post" action="/feature/delete">
+    <form method="post" action="/index/{{ index_id }}/feature/remove_from_model">
         <label for="feature_selection">Choose features:</label>
         <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
         <select name="feature_id" id="feature_selection" multiple>
@@ -15,12 +15,12 @@
             {% endfor %}
         </select>
         <button type="submit">Delete 🗑️</button>
-        <button type="submit" formaction="/cluster/create" method="post">Create New Cluster</button>
+        <button type="submit" formaction="/index/{{ index_id }}/cluster/create" method="post">Create New Cluster</button>
     </form>
 </details>
 <ul class="compact-cluster">
     {% for feature_id, field, value, count in features %}
-    <li><a class="feature-link" href=/cluster/{{cluster_id}}?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a> ({{ count }})</li>
+    <li><a class="feature-link" href="/index/{{ index_id }}/cluster/{{cluster_id}}?feature_id={{ feature_id }}">{{ field }}: {{ value }}</a> ({{ count }})</li>
     {% endfor %}
 </ul>
 

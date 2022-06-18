@@ -8,9 +8,7 @@ requires = [
     "jinja2>=3.1.0",
     "pyroaring>=0.3.3",
     "regex>=2022.4.24",
-    "starlette>=0.20.0",
-    "uvicorn>=0.17.0",
-    "python-multipart",
+    "cherrypy>=18.6.0",
 ]
 
 extras = {"test": ["pytest", "black", "tox"]}
