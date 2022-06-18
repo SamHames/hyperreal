@@ -54,36 +54,74 @@ def cleanup_index():
         cherrypy.request.index.close()
 
 
+@cherrypy.tools.register("before_handler")
+def ensure_list(**kwargs):
+    """Ensure that the given variables are always a list of the given type."""
+
+    for key, converter in kwargs.items():
+        value = cherrypy.request.params.get(key)
+        if value is None:
+            cherrypy.request.params[key] = []
+        elif isinstance(value, list):
+            cherrypy.request.params[key] = [converter(item) for item in value]
+        else:
+            cherrypy.request.params[key] = [converter(value)]
+
+
 class Cluster:
     @cherrypy.expose
-    def index(self, index_id, cluster_id):
-        return f"cluster {cluster_id}"
+    def index(self, index_id, cluster_id, feature_id=None):
+        template = templates.get_template("cluster.html")
+
+        cluster_id = int(cluster_id)
+
+        features = cherrypy.request.index.cluster_features(cluster_id)
+        n_features = len(features)
+
+        if feature_id is not None:
+            query = cherrypy.request.index[int(feature_id)]
+            features = cherrypy.request.index.pivot_clusters_by_query(
+                query, cluster_ids=[cluster_id], top_k=n_features
+            )[0][-1]
+
+        return template.render(
+            cluster_id=cluster_id, features=features, index_id=index_id
+        )
 
 
 @cherrypy.popargs("cluster_id", handler=Cluster())
 class ClusterOverview:
     @cherrypy.expose
-    def index(self, index_id):
-        return "cluster"
+    def index(self, index_id, cluster_id=None, feature_id=None):
+        pass
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
+    @cherrypy.tools.ensure_list(cluster_id=int)
     def delete(self, index_id, cluster_id=None):
-        return f"{cluster_id} deleted"
-        #     cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
-        #     request.app.state.index.delete_clusters(cluster_ids)
 
-        #     return RedirectResponse(url="/", status_code=303)
+        cherrypy.request.index.delete_clusters(cherrypy.request.params["cluster_id"])
 
-    @cherrypy.expose
-    @cherrypy.tools.allow(methods=["POST"])
-    def create(self, index_id, feature_id=None):
-        return f"{feature_id} created"
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
+    @cherrypy.tools.ensure_list(feature_id=int)
+    def create(self, index_id, feature_id=None, cluster_id=None):
+
+        new_cluster_id = cherrypy.request.index.create_cluster_from_features(
+            cherrypy.request.params["feature_id"]
+        )
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{new_cluster_id}")
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    @cherrypy.tools.ensure_list(cluster_id=int)
     def merge(self, index_id, cluster_id=None):
-        return f"{cluster_id} merged"
+        merge_cluster_id = cherrypy.request.index.merge_clusters(
+            cherrypy.request.params["cluster_id"]
+        )
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{merge_cluster_id}")
 
 
 class FeatureOverview:
@@ -93,8 +131,13 @@ class FeatureOverview:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    def remove_from_model(self, index_id, feature_id=None):
-        return f"{feature_id} deleted"
+    @cherrypy.tools.ensure_list(feature_id=int)
+    def remove_from_model(self, index_id, feature_id=None, cluster_id=None):
+        cherrypy.request.index.delete_features(cherrypy.request.params["feature_id"])
+        if cluster_id is not None:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
+        else:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
 
 
 @cherrypy.popargs("index_id")
@@ -104,10 +147,6 @@ class Index:
 
     cluster = ClusterOverview()
     feature = FeatureOverview()
-
-    def __init__(self):
-        # self.index = index.Index("test_data/expat_index.db")
-        pass
 
     @cherrypy.expose
     def index(self, index_id, feature_id=None, cluster_id=None):
@@ -157,7 +196,10 @@ class Index:
 class IndexOverview:
     @cherrypy.expose
     def index(self):
-        return f"index overview method {cherrypy.request.config}"
+
+        template = templates.get_template("index_listing.html")
+        indices = cherrypy.request.config["index_server"].list_indices()
+        return template.render(indices=indices)
 
 
 class Root:
@@ -261,137 +303,3 @@ def launch_web_server(index_server, auto_reload=False):
     cherrypy.engine.signals.subscribe()
     cherrypy.engine.start()
     cherrypy.engine.block()
-
-
-# async def homepage(request):
-
-#     template = templates.get_template("index.html")
-
-#     if "feature_id" in request.query_params:
-#         query = request.app.state.index[int(request.query_params["feature_id"])]
-#         clusters = request.app.state.index.pivot_clusters_by_query(query)
-#         rendered_docs = request.app.state.index.get_rendered_docs(
-#             query, random_sample_size=5
-#         )
-#         total_docs = len(query)
-#     elif "cluster_id" in request.query_params:
-#         query = request.app.state.index.cluster_docs(
-#             int(request.query_params["cluster_id"])
-#         )
-#         clusters = request.app.state.index.pivot_clusters_by_query(query)
-#         rendered_docs = request.app.state.index.get_rendered_docs(
-#             query, random_sample_size=5
-#         )
-#         total_docs = len(query)
-#     else:
-#         clusters = request.app.state.index.top_cluster_features()
-#         rendered_docs = []
-#         total_docs = 0
-
-#     return HTMLResponse(
-#         template.render(
-#             clusters=clusters, total_docs=total_docs, rendered_docs=rendered_docs
-#         )
-#     )
-
-
-# async def delete_clusters(request):
-
-#     data = await request.form()
-
-#     cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
-#     request.app.state.index.delete_clusters(cluster_ids)
-
-#     return RedirectResponse(url="/", status_code=303)
-
-
-# async def merge_clusters(request):
-
-#     data = await request.form()
-
-#     cluster_ids = [int(cluster_id) for cluster_id in data.getlist("cluster_id")]
-#     new_cluster_id = request.app.state.index.merge_clusters(cluster_ids)
-
-#     return RedirectResponse(url=f"/?cluster_id={new_cluster_id}", status_code=303)
-
-
-# async def delete_features(request):
-
-#     data = await request.form()
-#     return_url = f"/cluster/{data['cluster_id']}" if "cluster_id" in data else "/"
-
-#     feature_ids = [int(feature_id) for feature_id in data.getlist("feature_id")]
-#     request.app.state.index.delete_features(feature_ids)
-
-#     return RedirectResponse(url=return_url, status_code=303)
-
-
-# async def create_cluster(request):
-
-#     data = await request.form()
-
-#     feature_ids = [int(feature_id) for feature_id in data.getlist("feature_id")]
-#     new_cluster_id = request.app.state.index.create_cluster_from_features(feature_ids)
-
-#     return RedirectResponse(url=f"/cluster/{new_cluster_id}", status_code=303)
-
-
-# async def cluster(request):
-
-#     template = templates.get_template("cluster.html")
-
-#     cluster_id = int(request.path_params["cluster_id"])
-
-#     features = request.app.state.index.cluster_features(cluster_id)
-#     n_features = len(features)
-
-#     if "feature_id" in request.query_params:
-#         query = request.app.state.index[int(request.query_params["feature_id"])]
-#         features = request.app.state.index.pivot_clusters_by_query(
-#             query, cluster_ids=[cluster_id], top_k=n_features
-#         )[0][-1]
-#     elif "cluster_id" in request.query_params:
-#         query = request.app.state.index.cluster_docs(
-#             int(request.query_params["cluster_id"])
-#         )
-#         features = request.app.state.index.pivot_clusters_by_query(
-#             query, cluster_ids=[cluster_id], top_k=n_features
-#         )[0][-1]
-
-#     return HTMLResponse(template.render(cluster_id=cluster_id, features=features))
-
-
-# async def query(request):
-#     query = parse_qsl(request.url.query)
-
-#     results = request.app.state.index[query[0]]
-
-#     for feature in query[1:]:
-#         results |= request.app.state.index[feature]
-
-#     docs = request.app.state.index.get_docs(results[:100])
-
-#     return PlainTextResponse("\n\n".join(str(d[1]) for d in docs))
-
-
-# def create_app():
-
-#     routes = [
-#         Route("/", endpoint=homepage),
-#         Route("/cluster/create", endpoint=create_cluster, methods=["post"]),
-#         Route("/cluster/delete", endpoint=delete_clusters, methods=["post"]),
-#         Route("/cluster/merge", endpoint=merge_clusters, methods=["post"]),
-#         Route("/cluster/{cluster_id:int}", endpoint=cluster),
-#         Route("/feature/delete", endpoint=delete_features, methods=["post"]),
-#         Route("/query", endpoint=query),
-#     ]
-
-#     app = Starlette(debug=True, routes=routes)
-
-#     if os.getenv("hyperreal_index_path"):
-#         app.state.index = index.Index(os.getenv("hyperreal_index_path"))
-
-#     return app
-
-
-# app = create_app()

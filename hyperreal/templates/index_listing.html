@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster {{ cluster_id }}{% endblock %}
+
+{% block content %}
+
+<ul class="compact-cluster">
+    {% for index_id, (index_path, corpus_class, corpus_args, corpus_kwargs) in indices.items() %}
+    <li><a href="/index/{{ index_id }}">{{ index_path }}, {{ corpus_class.CORPUS_TYPE }}</a></li>
+    {% endfor %}
+</ul>
+
+{% endblock %}

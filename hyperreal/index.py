@@ -248,6 +248,9 @@ class Index:
             self.db.execute("release load_slice")
             return results
 
+        else:
+            return BitMap()
+
     @requires_corpus
     def index(
         self,

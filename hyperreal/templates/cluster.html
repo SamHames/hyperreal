@@ -6,7 +6,7 @@
 
 <details>
     <summary>Edit this cluster</summary>
-    <form method="post" action="/index/{{ index_id }}/feature/delete">
+    <form method="post" action="/index/{{ index_id }}/feature/remove_from_model">
         <label for="feature_selection">Choose features:</label>
         <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
         <select name="feature_id" id="feature_selection" multiple>
@@ -20,7 +20,7 @@
 </details>
 <ul class="compact-cluster">
     {% for feature_id, field, value, count in features %}
-    <li><a class="feature-link" href=/index/{{ index_id }}/cluster/{{cluster_id}}?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a> ({{ count }})</li>
+    <li><a class="feature-link" href="/index/{{ index_id }}/cluster/{{cluster_id}}?feature_id={{ feature_id }}">{{ field }}: {{ value }}</a> ({{ count }})</li>
     {% endfor %}
 </ul>
 
