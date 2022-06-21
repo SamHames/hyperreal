@@ -160,18 +160,18 @@ class Index:
             clusters = cherrypy.request.index.pivot_clusters_by_query(query)
 
             if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.get_rendered_docs(
+                rendered_docs = cherrypy.request.index.render_docs(
                     query, random_sample_size=5
                 )
 
             total_docs = len(query)
 
         elif cluster_id is not None:
-            query = cherrypy.request.index.cluster_docs(int(cluster_id))
+            query = cherrypy.request.index.cluster_query(int(cluster_id))
             clusters = cherrypy.request.index.pivot_clusters_by_query(query)
 
             if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.get_rendered_docs(
+                rendered_docs = cherrypy.request.index.render_docs(
                     query, random_sample_size=5
                 )
 

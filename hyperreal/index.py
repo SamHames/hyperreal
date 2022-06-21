@@ -115,6 +115,10 @@ pragma application_id = { MAGIC_APPLICATION_ID };
 """
 
 
+class CorpusMissingError(AttributeError):
+    pass
+
+
 def requires_corpus(func):
     """
     Mark method as requiring a corpus object.
@@ -126,9 +130,11 @@ def requires_corpus(func):
     @wraps(func)
     def wrapper_func(self, *args, **kwargs):
         if self.corpus is None:
-            raise AttributeError("A Corpus object is needed for this functionality.")
+            raise CorpusMissingError(
+                "A Corpus must be provided to the index for this functionality."
+            )
 
-        func(self, *args, **kwargs)
+        return func(self, *args, **kwargs)
 
     return wrapper_func
 
@@ -421,24 +427,25 @@ class Index:
     def convert_query_to_keys(self, query):
         """Generate the doc_keys one by one for the given query."""
         self.db.execute("savepoint get_doc_keys")
+
         for doc_id in query:
             doc_key = list(
                 self.db.execute(
                     "select doc_key from doc_key where doc_id = ?", [doc_id]
                 )
             )[0][0]
-
             yield doc_key
 
         self.db.execute("release get_doc_keys")
 
     @requires_corpus
-    def get_docs(self, query):
+    def docs(self, query):
         """Retrieve the documents matching the given query set."""
-        return self.corpus.docs(doc_keys=self.convert_query_to_keys(query))
+        keys = self.convert_query_to_keys(query)
+        return self.corpus.docs(doc_keys=keys)
 
     @requires_corpus
-    def get_rendered_docs(self, query, random_sample_size=None):
+    def render_docs(self, query, random_sample_size=None):
         """
         Return the rendered representation of the docs matching this query.
 
@@ -448,8 +455,7 @@ class Index:
         if random_sample_size is not None:
             q = len(query)
             if q > random_sample_size:
-                choice = random.sample(range(q), random_sample_size)
-                query = BitMap(query[i] for i in choice)
+                query = random.sample(range(q), random_sample_size)
 
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_html(doc_keys)
@@ -609,7 +615,7 @@ class Index:
 
         return cluster_features
 
-    def cluster_docs(self, cluster_id):
+    def cluster_query(self, cluster_id):
         """Return the bitset representing docs matching this cluster of features."""
 
         self.db.execute("savepoint cluster_docs")

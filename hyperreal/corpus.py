@@ -194,25 +194,20 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     def docs(self, doc_keys=None):
 
-        try:
-            self.db.execute("savepoint docs")
+        self.db.execute("savepoint docs")
 
-            # Note that it's valid to pass an empty sequence of doc_keys,
-            # so we need to check sentinel explicitly.
-            if doc_keys is None:
-                doc_keys = self.keys()
+        # Note that it's valid to pass an empty sequence of doc_keys,
+        # so we need to check sentinel explicitly.
+        if doc_keys is None:
+            doc_keys = self.keys()
 
-            for key in doc_keys:
-                doc = list(
-                    self.db.execute(
-                        "select text from doc where doc_id = ?",
-                        [key],
-                    )
-                )[0][0]
-                yield key, doc
+        for key in doc_keys:
+            doc = list(
+                self.db.execute("select doc_id, text from doc where doc_id = ?", [key])
+            )[0]
+            yield doc
 
-        finally:
-            self.db.execute("release docs")
+        self.db.execute("release docs")
 
     def keys(self):
         return (r[0] for r in self.db.execute("select doc_id from doc"))
