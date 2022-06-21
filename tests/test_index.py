@@ -3,6 +3,7 @@ Test cases for the index functionality, including integration with some
 concrete corpus objects.
 
 """
+import csv
 import pathlib
 import random
 import shutil
@@ -18,6 +19,16 @@ def example_index_path(tmp_path):
     random_name = tmp_path / str(uuid.uuid4())
     shutil.copy(pathlib.Path("tests", "index", "alice_index.db"), random_name)
     return random_name
+
+
+@pytest.fixture
+def example_index_corpora_path(tmp_path):
+    random_corpus = tmp_path / str(uuid.uuid4())
+    shutil.copy(pathlib.Path("tests", "corpora", "alice.db"), random_corpus)
+    random_index = tmp_path / str(uuid.uuid4())
+    shutil.copy(pathlib.Path("tests", "index", "alice_index.db"), random_index)
+
+    return random_corpus, random_index
 
 
 # This is a list of tuples, corresponding to the corpus class to test, and the
@@ -36,7 +47,27 @@ def test_indexing(tmp_path, corpus, args, kwargs):
     """Test that all builtin corpora can be successfully indexed and queried."""
     c = corpus(*args, **kwargs)
     i = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c)
-    i.index()
+
+    # These are actually very bad settings, but necessary for checking
+    # all code paths and concurrency.
+    i.index(
+        batch_key_size=10,
+        max_batch_entries=1000,
+    )
+
+    # Compare against the actual test data.
+    with open("tests/data/alice30.txt", "r", encoding="utf-8") as f:
+        docs = (line[0] for line in csv.reader(f) if line and line[0].strip())
+        target_nnz = 0
+        target_docs = 0
+        for d in docs:
+            target_docs += 1
+            target_nnz += len(set(hyperreal.utilities.tokens(d)))
+
+    nnz = list(i.db.execute("select sum(docs_count) from inverted_index"))[0][0]
+    total_docs = list(i.db.execute("select count(*) from doc_key"))[0][0]
+    assert total_docs == target_docs
+    assert nnz == target_nnz
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
@@ -102,3 +133,65 @@ def test_model_editing(example_index_path):
     )
     assert new_cluster_id == 16
     assert len(index.cluster_ids) == 13
+
+
+def test_querying(example_index_corpora_path):
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+    index = hyperreal.index.Index(example_index_corpora_path[1], corpus=corpus)
+
+    index.initialise_clusters(16)
+
+    query = index[("text", "the")]
+    q = len(query)
+    assert q
+    assert q == len(list(index.convert_query_to_keys(query)))
+    assert q == len(list(index.docs(query)))
+    assert q == len(index.render_docs(query))
+    assert 5 == len(index.render_docs(query, random_sample_size=5))
+
+    for doc_key, doc in index.docs(query):
+        assert "the" in hyperreal.utilities.tokens(doc)
+
+    # Confirm that feature_id -> feature mappings in the model are correct
+    # And the cluster queries are in fact boolean combinations.
+    for cluster_id in index.cluster_ids:
+        cluster_query = index.cluster_query(cluster_id)
+
+        for feature_id, field, value, docs_count in index.cluster_features(cluster_id):
+            assert index[feature_id] == index[(field, value)]
+            assert (index[feature_id] & cluster_query) == index[feature_id]
+
+    # Clusters id queries should also return something interestin
+
+
+def test_require_corpus(example_index_corpora_path):
+    """Test the corpus requiring decorator works."""
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+
+    index_wo_corpus = hyperreal.index.Index(example_index_corpora_path[1])
+    index_wi_corpus = hyperreal.index.Index(
+        example_index_corpora_path[1], corpus=corpus
+    )
+
+    query = index_wo_corpus[("text", "the")]
+
+    with pytest.raises(hyperreal.index.CorpusMissingError):
+        index_wo_corpus.docs(query)
+
+    assert len(query) == len(list(index_wi_corpus.docs(query)))
+
+
+def test_pivoting(example_index_path):
+    """Test pivoting by features and by clusters."""
+    index = hyperreal.index.Index(example_index_path)
+
+    index.initialise_clusters(16)
+
+    pivoted = index.pivot_clusters_by_query(index[("text", "the")])
+    for cluster_id, features in pivoted:
+        # This feature should be first in the cluster, but the cluster
+        # containing it may not always be first.
+        if ("text", "the") == features[0][1:3]:
+            break
+    else:
+        assert False
