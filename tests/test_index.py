@@ -152,6 +152,9 @@ def test_querying(example_index_corpora_path):
     for doc_key, doc in index.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc)
 
+    # No matches, return nothing:
+    assert not len(index[("nonexistent", "field")])
+
     # Confirm that feature_id -> feature mappings in the model are correct
     # And the cluster queries are in fact boolean combinations.
     for cluster_id in index.cluster_ids:
@@ -160,8 +163,6 @@ def test_querying(example_index_corpora_path):
         for feature_id, field, value, docs_count in index.cluster_features(cluster_id):
             assert index[feature_id] == index[(field, value)]
             assert (index[feature_id] & cluster_query) == index[feature_id]
-
-    # Clusters id queries should also return something interestin
 
 
 def test_require_corpus(example_index_corpora_path):
@@ -187,11 +188,14 @@ def test_pivoting(example_index_path):
 
     index.initialise_clusters(16)
 
-    pivoted = index.pivot_clusters_by_query(index[("text", "the")])
-    for cluster_id, features in pivoted:
-        # This feature should be first in the cluster, but the cluster
-        # containing it may not always be first.
-        if ("text", "the") == features[0][1:3]:
-            break
-    else:
-        assert False
+    # Test early/late truncation in each direction with large and small
+    # features.
+    for query in [("text", "the"), ("text", "denied")]:
+        pivoted = index.pivot_clusters_by_query(index[query], top_k=2)
+        for cluster_id, features in pivoted:
+            # This feature should be first in the cluster, but the cluster
+            # containing it may not always be first.
+            if query == features[0][1:3]:
+                break
+        else:
+            assert False

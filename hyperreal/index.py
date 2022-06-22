@@ -209,23 +209,29 @@ class Index:
         self.db.close()
 
     def __getitem__(self, key):
-        """__getitem__ can either be a feature_id integer, or a (field, value) tuple."""
+        """key can either be a feature_id integer, a (field, value) tuple, or a slice of (field, value)'s indicating a range."""
 
         if isinstance(key, int):
-            return list(
-                self.db.execute(
-                    "select doc_ids from inverted_index where feature_id = ?",
-                    [key],
-                )
-            )[0][0]
+            try:
+                return list(
+                    self.db.execute(
+                        "select doc_ids from inverted_index where feature_id = ?",
+                        [key],
+                    )
+                )[0][0]
+            except IndexError:
+                return BitMap()
 
         elif isinstance(key, tuple):
-            return list(
-                self.db.execute(
-                    "select doc_ids from inverted_index where (field, value) = (?, ?)",
-                    key,
-                )
-            )[0][0]
+            try:
+                return list(
+                    self.db.execute(
+                        "select doc_ids from inverted_index where (field, value) = (?, ?)",
+                        key,
+                    )
+                )[0][0]
+            except IndexError:
+                return BitMap()
 
         elif isinstance(key, slice):
             self.db.execute("savepoint load_slice")
@@ -253,9 +259,6 @@ class Index:
 
             self.db.execute("release load_slice")
             return results
-
-        else:
-            return BitMap()
 
     @requires_corpus
     def index(

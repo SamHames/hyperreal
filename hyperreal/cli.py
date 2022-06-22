@@ -127,7 +127,7 @@ def serve(index_db):
         raise ValueError(f"{index_db} is not a valid index file.")
 
     mp_context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=self.mp_context) as pool:
+    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
         index_server = hyperreal.server.SingleIndexServer(
             index_db, pool=pool, mp_context=mp_context
         )
