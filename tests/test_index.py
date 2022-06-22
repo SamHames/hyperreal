@@ -152,6 +152,9 @@ def test_querying(example_index_corpora_path):
     for doc_key, doc in index.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc)
 
+    for doc_key, doc in index.render_docs(query, random_sample_size=3):
+        assert "the" in hyperreal.utilities.tokens(doc)
+
     # No matches, return nothing:
     assert not len(index[("nonexistent", "field")])
 

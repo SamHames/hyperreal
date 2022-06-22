@@ -458,7 +458,9 @@ class Index:
         if random_sample_size is not None:
             q = len(query)
             if q > random_sample_size:
-                query = random.sample(range(q), random_sample_size)
+                query = BitMap(
+                    query[i] for i in random.sample(range(q), random_sample_size)
+                )
 
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_html(doc_keys)
