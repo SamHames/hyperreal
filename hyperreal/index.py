@@ -19,7 +19,7 @@ import tempfile
 
 from pyroaring import BitMap, FrozenBitMap
 
-from hyperreal import extensions, db_utilities, corpus
+from hyperreal import db_utilities, corpus
 
 
 # The application ID uses SQLite's pragma application_id to quickly identify index
