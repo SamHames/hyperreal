@@ -31,6 +31,7 @@ setup(
     install_requires=requires,
     setup_requires=["setuptools_scm"],
     extras_require=extras,
+    python_requires=">=3.9.0",
     author="Sam Hames",
     author_email="s.hames@uq.edu.au",
     description="Hyperreal is a library and tool for intepretive text analytics.",
