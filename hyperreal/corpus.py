@@ -190,30 +190,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "StackExchangeCorpus"
 
-    TEMPLATE = Template(
-        """
-        <details>
-            <summary>{{ base_fields["PostType"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
-            
-            {{ base_fields["Body"] }}
-
-            <details>
-                <summary>Tags:</summary>
-                <ul>
-                    {{ tags }}
-                </ul>
-            </details>
-
-            <details>
-                <summary>Tags:</summary>
-                <ul>
-                    {{ tags }}
-                </ul>
-            </details>
-        </details>
-        """
-    )
-
     def replace_docs(self, posts_file, comments_file, users_file):
         """Completely replace the content of the corpus with the content of these files."""
         self.db.execute("pragma journal_mode=WAL")
@@ -243,10 +219,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 ContentLicense text,
                 Score integer,
                 Text text,
-                UserId references User(Id),
-                PostId references Post(Id),
+                UserId integer references User(Id),
+                PostId integer references Post(Id),
                 Id integer primary key
             );
+
+            create index post_comment on comment(PostId);
 
             drop table if exists User;
             create table User(
@@ -423,10 +401,44 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     )
                 ]
 
+                # Use the tags on the question, not the (absent) tags on the answer.
+                doc["UserComments"] = list(
+                    self.db.execute(
+                        "select UserId, Text from comment where PostId = ?",
+                        [key],
+                    )
+                )
+
                 yield key, doc
 
         finally:
             self.db.execute("release docs")
+
+    TEMPLATE = Template(
+        """
+        <details>
+            <summary>{{ base_fields["PostType"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
+            
+            {{ base_fields["Body"] }}
+
+            <details>
+                <summary>Tags:</summary>
+                <ul>
+                    {{ tags }}
+                </ul>
+            </details>
+
+            <details>
+                <summary>Comments:</summary>
+                <ul>
+                    {% for comment in user_comments %}
+                        <li>{{ comment["Text"] }}</li>
+                    {% endfor %}
+                </ul>
+            </details>
+        </details>
+        """
+    )
 
     def _render_doc_key(self, key):
 
@@ -451,7 +463,18 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             for r in self.db.execute("select Tag from PostTag where PostId = ?", [key])
         )
 
-        return Markup(self.TEMPLATE.render(base_fields=base_fields, tags=tags))
+        user_comments = list(
+            self.db.execute(
+                "select UserId, Text from comment where PostId = ?",
+                [key],
+            )
+        )
+
+        return Markup(
+            self.TEMPLATE.render(
+                base_fields=base_fields, tags=tags, user_comments=user_comments
+            )
+        )
 
     def render_docs_html(self, doc_keys):
         self.db.execute("savepoint render_docs_html")
@@ -473,4 +496,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 )
             ),
             "Tag": doc["Tags"],
+            # Comments from deleted users remain, but have no UserId associated.
+            "UsersCommenting": [
+                u["UserId"] for u in doc["UserComments"] if u["UserId"] is not None
+            ],
+            "Comment": [
+                t
+                for c in doc["UserComments"]
+                for t in hyperreal.utilities.tokens(c["Text"])
+            ],
         }
