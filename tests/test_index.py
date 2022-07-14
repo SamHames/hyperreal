@@ -168,6 +168,13 @@ def test_querying(example_index_corpora_path):
             assert index[feature_id] == index[(field, value)]
             assert (index[feature_id] & cluster_query) == index[feature_id]
 
+    # Confirm that feature lookup works in both directions
+    feature = index.lookup_feature(1)
+    assert index[1] == index[feature]
+
+    feature_id = index.lookup_feature_id(("text", "the"))
+    assert index[feature_id] == index[("text", "the")]
+
 
 def test_require_corpus(example_index_corpora_path):
     """Test the corpus requiring decorator works."""
@@ -203,3 +210,23 @@ def test_pivoting(example_index_path):
                 break
         else:
             assert False
+
+
+def test_create_new_features(example_index_corpora_path):
+    """Test creating new features - possibly from old features."""
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+    index = hyperreal.index.Index(example_index_corpora_path[1], corpus=corpus)
+
+    new_feature = index[("text", "the")] & index[("text", "and")]
+    new_feature_key = ("custom", "arbitrary new feature")
+    index[new_feature_key] = new_feature
+
+    assert index[new_feature_key] == new_feature
+
+    with pytest.raises(KeyError):
+        index[("text", "the")] = index[("text", "the")]
+
+    # Reindexing will remove the custom feature
+    index.index()
+
+    assert not len(index[new_feature_key])

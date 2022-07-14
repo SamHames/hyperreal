@@ -6,6 +6,7 @@ to document keys.
 
 import array
 import collections
+from collections.abc import Sequence
 import concurrent.futures as cf
 from functools import wraps
 import heapq
@@ -15,9 +16,10 @@ import os
 import random
 import sqlite3
 import tempfile
+from typing import Any
 
 
-from pyroaring import BitMap, FrozenBitMap
+from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
 
 from hyperreal import db_utilities, corpus
 
@@ -259,6 +261,62 @@ class Index:
 
             self.db.execute("release load_slice")
             return results
+
+    def __setitem__(self, key: Sequence[str, Any], doc_ids: AbstractBitMap) -> None:
+        """
+        Create a new feature in the index.
+
+        Note:
+
+        - Existing features are immutable and cannot be changed.
+        - Features added in this way are not currently preserved on reindexing.
+
+        """
+        self.db.execute("savepoint setitem")
+
+        try:
+            self.db.execute(
+                "insert into inverted_index(field, value, docs_count, doc_ids) values(?, ?, ?, ?)",
+                [*key, len(doc_ids), doc_ids],
+            )
+        except sqlite3.IntegrityError:
+            self.db.execute("rollback to setitem")
+            raise KeyError(f"Feature {key} already exists.")
+        except Exception:
+            self.db.execute("rollback to setitem")
+            raise
+        finally:
+            self.db.execute("release setitem")
+
+    def lookup_feature(self, feature_id: int) -> tuple[str, Any]:
+        """Lookup the (field, value) for this feature by feature_id."""
+
+        results = list(
+            self.db.execute(
+                "select field, value from inverted_index where feature_id = ?",
+                [feature_id],
+            )
+        )
+
+        if results:
+            return results[0]
+        else:
+            raise KeyError(f"Feature with id '{feature_id}' not found.")
+
+    def lookup_feature_id(self, key: Sequence[str, Any]) -> int:
+        """Lookup the (field, value) for this feature by feature_id."""
+
+        results = list(
+            self.db.execute(
+                "select feature_id from inverted_index where (field, value) = (?, ?)",
+                key,
+            )
+        )
+
+        if results:
+            return results[0][0]
+        else:
+            raise KeyError(f"Feature with key '{key}' not found.")
 
     @requires_corpus
     def index(
