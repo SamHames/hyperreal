@@ -172,13 +172,33 @@ def stackexchange_corpus_serve(corpus_db, index_db):
 @cli.command()
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
 @click.option("--iterations", default=10)
-@click.option("--clusters", default=64)
+@click.option(
+    "--clusters",
+    default=64,
+    help="The number of clusters to use in the model. Ignored unless this is the first run, or --restart is passed.",
+)
 @click.option("--min-docs", default=100)
-def model(index_db, iterations, clusters, min_docs):
+@click.option(
+    "--restart", default=False, is_flag=True, help="Restart the model from scratch."
+)
+def model(index_db, iterations, clusters, min_docs, restart):
 
-    click.echo(f"Creating feature cluster model on {index_db}.")
     doc_index = hyperreal.index.Index(index_db)
-    doc_index.initialise_clusters(n_clusters=clusters, min_docs=min_docs)
+
+    # Check if any clusters exist.
+    has_clusters = bool(doc_index.cluster_ids)
+
+    if has_clusters:
+        if restart:
+            click.echo(
+                f"Restarting new feature cluster model with {clusters} on {index_db}."
+            )
+            doc_index.initialise_clusters(n_clusters=clusters, min_docs=min_docs)
+    else:
+        click.echo(f"Creating new feature cluster model with {clusters} on {index_db}.")
+        doc_index.initialise_clusters(n_clusters=clusters, min_docs=min_docs)
+
+    click.echo(f"Refining for {iterations} iterations on {index_db}.")
     doc_index.refine_clusters(iterations=iterations)
 
 
