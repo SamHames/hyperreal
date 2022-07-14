@@ -150,10 +150,11 @@ def test_querying(example_index_corpora_path):
     assert 5 == len(index.render_docs(query, random_sample_size=5))
 
     for doc_key, doc in index.docs(query):
-        assert "the" in hyperreal.utilities.tokens(doc)
+        assert "the" in hyperreal.utilities.tokens(doc["text"])
 
-    for doc_key, doc in index.render_docs(query, random_sample_size=3):
-        assert "the" in hyperreal.utilities.tokens(doc)
+    # This is a hacky test, as we're tokenising the representation of the text.
+    for doc_key, rendered_doc in index.render_docs(query, random_sample_size=3):
+        assert "the" in hyperreal.utilities.tokens(rendered_doc)
 
     # No matches, return nothing:
     assert not len(index[("nonexistent", "field")])

@@ -13,7 +13,12 @@ import abc
 from collections import defaultdict
 import gzip
 import json
+import re
 from typing import Protocol, runtime_checkable
+from xml.etree import ElementTree
+
+from jinja2 import Template
+from markupsafe import Markup
 
 import hyperreal.utilities
 from hyperreal.db_utilities import connect_sqlite, dict_factory
@@ -103,8 +108,7 @@ class SqliteBackedCorpus(BaseCorpus):
     @property
     def db(self):
         if self._db is None:
-            self._db = connect_sqlite(self.db_path)
-            self._db.execute("pragma journal_mode=WAL")
+            self._db = connect_sqlite(self.db_path, row_factory=dict_factory)
 
         return self._db
 
@@ -126,53 +130,13 @@ class SqliteBackedCorpus(BaseCorpus):
             self._db.close()
 
 
-class TidyTweetCorpus(SqliteBackedCorpus):
-
-    CORPUS_TYPE = "TidyTweetCorpus"
-
-    def docs(self, doc_keys=None):
-        self.db.execute("savepoint docs")
-
-        try:
-            # Note that it's valid to pass an empty sequence of doc_keys,
-            # so we need to check sentinel explicitly.
-            if doc_keys is None:
-                doc_keys = self.keys()
-
-            for key in doc_keys:
-                doc = list(
-                    self.db.execute(
-                        "select text, author_id, created_at from tweet where id = ?",
-                        [key],
-                    )
-                )[0]
-                yield key, doc
-
-        finally:
-            self.db.execute("release docs")
-
-    def keys(self):
-        return (
-            row[0]
-            for row in self.db.execute(
-                "select distinct id from tweet where directly_collected=1"
-            )
-        )
-
-    def index(self, doc):
-        return {
-            "text": hyperreal.utilities.social_media_tokens(doc[0]),
-            "author_id": [doc[1]],
-            "created_at_utc_day": [doc[2][:10]],
-        }
-
-
 class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
 
     def replace_docs(self, texts):
         """Replace the existing documents with texts."""
+        self.db.execute("pragma journal_mode=WAL")
         self.db.execute("savepoint add_texts")
 
         self.db.execute("drop table if exists doc")
@@ -205,126 +169,223 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
             doc = list(
                 self.db.execute("select doc_id, text from doc where doc_id = ?", [key])
             )[0]
-            yield doc
+            yield key, doc
 
         self.db.execute("release docs")
 
     def keys(self):
-        return (r[0] for r in self.db.execute("select doc_id from doc"))
+        return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
 
     def index(self, doc):
         return {
-            "text": hyperreal.utilities.tokens(doc),
+            "text": hyperreal.utilities.tokens(doc["text"]),
         }
 
     def render_docs_html(self, doc_keys):
         """Return the given documents as HTML."""
-        return list(self.docs(doc_keys=doc_keys))
+        return [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
 
 
-class CirrusSearchWikiCorpus(SqliteBackedCorpus):
+class StackExchangeCorpus(SqliteBackedCorpus):
 
-    CORPUS_TYPE = "CirrusSearchWikiCorpus"
+    CORPUS_TYPE = "StackExchangeCorpus"
 
-    def ingest(self, filepath):
+    TEMPLATE = Template(
+        """
+        <details>
+            <summary>{{ base_fields["PostType"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
+            
+            {{ base_fields["Body"] }}
 
+            <details>
+                <summary>Tags:</summary>
+                <ul>
+                    {{ tags }}
+                </ul>
+            </details>
+
+            <details>
+                <summary>Tags:</summary>
+                <ul>
+                    {{ tags }}
+                </ul>
+            </details>
+        </details>
+        """
+    )
+
+    def replace_docs(self, posts_file, comments_file, users_file):
+        """Completely replace the content of the corpus with the content of these files."""
+        self.db.execute("pragma journal_mode=WAL")
         self.db.executescript(
             """
-            pragma foreign_keys=1;
-
-            create table if not exists page(
-                id text primary key,
-                create_timestamp datetime,
-                timestamp datetime,
-                incoming_links integer,
-                popularity_score float,
-                text_bytes integer,
-                text text,
-                title text
+            drop table if exists Post;
+            create table Post(
+                Id integer primary key,
+                OwnerUserId integer,
+                AcceptedAnswerId integer references Post,
+                ContentLicense text,
+                ParentId integer references Post,
+                Title text default '',
+                FavoriteCount integer,
+                Score integer,
+                CreationDate datetime,
+                ViewCount integer,
+                Body text,
+                LastActivityDate datetime,
+                CommentCount integer,
+                PostType text
             );
 
-            create table if not exists page_external_link(
-                id integer references page(id) on delete cascade,
-                link text,
-                primary key (id, link)
+            drop table if exists comment;
+            create table comment(
+                CreationDate datetime,
+                ContentLicense text,
+                Score integer,
+                Text text,
+                UserId references User(Id),
+                PostId references Post(Id),
+                Id integer primary key
             );
 
-            create table if not exists page_category(
-                id integer references page(id) on delete cascade,
-                category text,
-                primary key (id, category)
+            drop table if exists User;
+            create table User(
+                AboutMe text,
+                CreationDate datetime,
+                Location text,
+                ProfileImageUrl text,
+                WebsiteUrl text,
+                AccountId integer,
+                Reputation integer,
+                Id integer primary key,
+                Views integer,
+                UpVotes integer,
+                DownVotes integer,
+                DisplayName text,
+                LastAccessDate datetime
             );
 
-            create table if not exists page_outgoing_link(
-                id integer references page(id) on delete cascade,
-                link text,
-                primary key (id, link)
+            drop table if exists PostTag;
+            create table PostTag(
+                PostId integer references Post,
+                Tag text,
+                primary key (PostId, Tag)
             );
+
             """
         )
 
         try:
             self.db.execute("begin")
 
-            docs_added = 0
-            batch_docs_added = 0
+            # Process Posts, which includes both questions and answers.
+            tag_splitter = re.compile("<|>|<>")
 
-            with gzip.open(filepath, "rt") as f:
+            tree = ElementTree.iterparse(posts_file, events=("end",))
+            post_types = {"1": "Question", "2": "Answer"}
 
-                for page in f:
-                    page_id = json.loads(page)["index"]["_id"]
-                    content = defaultdict(lambda: None)
-                    content.update(json.loads(next(f)))
-                    content["id"] = page_id
+            for event, elem in tree:
 
-                    self.db.execute(
-                        """
-                        replace into page values(
-                            :id,
-                            :create_timestamp,
-                            :timestamp,
-                            :incoming_links,
-                            :popularity_score,
-                            :text_bytes,
-                            :text,
-                            :title
-                        )
-                        """,
-                        content,
+                # We only consider questions and answers - SX uses other post types
+                # to describe wiki's, tags, moderator nominations and more.
+                if elem.attrib.get("PostTypeId") not in ("1", "2"):
+                    elem.clear()
+                    continue
+
+                doc = defaultdict(lambda: None)
+                doc.update(elem.attrib)
+                doc["PostType"] = post_types[elem.attrib["PostTypeId"]]
+
+                self.db.execute(
+                    """
+                    insert into post values (
+                        :Id,
+                        :OwnerUserId,
+                        :AcceptedAnswerId,
+                        :ContentLicense,
+                        :ParentId,
+                        :Title,
+                        :FavoriteCount,
+                        :Score,
+                        :CreationDate,
+                        :ViewCount,
+                        :Body,
+                        :LastActivityDate,
+                        :CommentCount,
+                        :PostType
                     )
+                    """,
+                    doc,
+                )
 
-                    if content["external_link"]:
-                        self.db.executemany(
-                            "insert into page_external_link values(?, ?)",
-                            ((page_id, link) for link in content["external_link"]),
-                        )
+                tag_insert = (
+                    (elem.attrib["Id"], t)
+                    for t in tag_splitter.split(elem.attrib.get("Tags", ""))
+                    if t
+                )
 
-                    if content["category"]:
-                        self.db.executemany(
-                            "insert into page_category values(?, ?)",
-                            ((page_id, link) for link in content["category"]),
-                        )
+                self.db.executemany("insert into PostTag values(?, ?)", tag_insert)
 
-                    if content["outgoing_link"]:
-                        self.db.executemany(
-                            "insert into page_outgoing_link values(?, ?)",
-                            ((page_id, link) for link in content["outgoing_link"]),
-                        )
+                # This is important when using iterparse to free memory from
+                # processed nodes in the tree.
+                elem.clear()
 
-                    docs_added += 1
-                    batch_docs_added += 1
+            tree = ElementTree.iterparse(comments_file, events=("end",))
 
-                    if batch_docs_added == 100000:
-                        self.db.execute("commit")
-                        batch_docs_added = 0
-                        print(docs_added)
-                        self.db.execute("begin")
+            for event, elem in tree:
+
+                doc = defaultdict(lambda: None)
+                doc.update(elem.attrib)
+
+                self.db.execute(
+                    """
+                    insert into comment values (
+                        :CreationDate,
+                        :ContentLicense,
+                        :Score,
+                        :Text,
+                        :UserId,
+                        :PostId,
+                        :Id
+                    )
+                    """,
+                    doc,
+                )
+                elem.clear()
+
+            tree = ElementTree.iterparse(users_file, events=("end",))
+
+            for event, elem in tree:
+
+                doc = defaultdict(lambda: None)
+                doc.update(elem.attrib)
+
+                self.db.execute(
+                    """
+                    insert into user values (
+                        :AboutMe,
+                        :CreationDate,
+                        :Location,
+                        :ProfileImageUrl,
+                        :WebsiteUrl,
+                        :AccountId,
+                        :Reputation,
+                        :Id,
+                        :Views,
+                        :UpVotes,
+                        :DownVotes,
+                        :DisplayName,
+                        :LastAccessDate
+                    )
+                    """,
+                    doc,
+                )
+                elem.clear()
 
             self.db.execute("commit")
 
         except Exception as e:
             self.db.execute("rollback")
-            print(page, content)
             raise
 
     def docs(self, doc_keys=None):
@@ -337,32 +398,28 @@ class CirrusSearchWikiCorpus(SqliteBackedCorpus):
                 doc_keys = self.keys()
 
             for key in doc_keys:
-                doc = list(self.db.execute("select * from page where id = ?", [key]))[0]
 
-                doc["external_link"] = [
-                    r["link"]
-                    for r in list(
-                        self.db.execute(
-                            "select link from page_external_link where id = ?", [key]
-                        )
+                doc = list(
+                    self.db.execute(
+                        """
+                        select 
+                            Title,
+                            Body,
+                            -- Used to retrieve tags for the root question, as
+                            -- the tags are not present on answers, only questions.
+                            coalesce(ParentId, Id) as TagPostId
+                        from post 
+                        where post.Id = ?
+                        """,
+                        [key],
                     )
-                ]
+                )[0]
 
-                doc["category"] = [
-                    r["category"]
-                    for r in list(
-                        self.db.execute(
-                            "select category from page_category where id = ?", [key]
-                        )
-                    )
-                ]
-
-                doc["outgoing_link"] = [
-                    r["link"]
-                    for r in list(
-                        self.db.execute(
-                            "select link from page_outgoing_link where id = ?", [key]
-                        )
+                # Use the tags on the question, not the (absent) tags on the answer.
+                doc["Tags"] = [
+                    r["Tag"]
+                    for r in self.db.execute(
+                        "select Tag from PostTag where PostId = ?", [doc["TagPostId"]]
                     )
                 ]
 
@@ -371,14 +428,49 @@ class CirrusSearchWikiCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
+    def _render_doc_key(self, key):
+
+        base_fields = list(
+            self.db.execute(
+                """
+                select 
+                    post.PostType, 
+                    post.Body,
+                    coalesce(Post.Title, parent.Title) as QuestionTitle
+                from Post 
+                left outer join Post parent 
+                    on parent.Id = Post.ParentId
+                where Post.Id = ?
+                """,
+                [key],
+            )
+        )[0]
+
+        tags = "\n".join(
+            f"<li>  { r['Tag'] }"
+            for r in self.db.execute("select Tag from PostTag where PostId = ?", [key])
+        )
+
+        return Markup(self.TEMPLATE.render(base_fields=base_fields, tags=tags))
+
+    def render_docs_html(self, doc_keys):
+        self.db.execute("savepoint render_docs_html")
+
+        docs = [(key, self._render_doc_key(key)) for key in doc_keys]
+
+        self.db.execute("release render_docs_html")
+
+        return docs
+
     def keys(self):
-        return (r["id"] for r in self.db.execute("select id from page"))
+        return (r["Id"] for r in self.db.execute("select Id from post"))
 
     def index(self, doc):
         return {
-            "text": hyperreal.utilities.tokens(doc.get("text", "")),
-            "title": hyperreal.utilities.tokens(doc.get("title", "")),
-            "external_link": doc.get("external_link", []),
-            "category": doc.get("category", []),
-            "outgoing_link": doc.get("outgoing_link", []),
+            "Post": hyperreal.utilities.tokens(
+                hyperreal.utilities.strip_tags(
+                    (doc["Title"] or "") + " " + (doc["Body"] or "")
+                )
+            ),
+            "Tag": doc["Tags"],
         }

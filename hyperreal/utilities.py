@@ -1,3 +1,6 @@
+from html.parser import HTMLParser
+from io import StringIO
+
 import regex
 
 
@@ -38,3 +41,31 @@ def social_media_tokens(entry):
 def tokens(entry):
     cleaned = entry.lower()
     return [token for token in word_tokenizer.split(cleaned) if token]
+
+
+class MLStripper(HTMLParser):
+    """
+    Strips tags from the provided HTML, retaining only the base text.
+
+    Via https://stackoverflow.com/questions/753052/strip-html-from-strings-in-python
+
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.reset()
+        self.strict = False
+        self.convert_charrefs = True
+        self.text = StringIO()
+
+    def handle_data(self, d):
+        self.text.write(d)
+
+    def get_data(self):
+        return self.text.getvalue()
+
+
+def strip_tags(html):
+    s = MLStripper()
+    s.feed(html)
+    return s.get_data()

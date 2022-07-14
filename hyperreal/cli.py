@@ -97,6 +97,78 @@ def plaintext_corpus_serve(corpus_db, index_db):
         hyperreal.server.launch_web_server(index_server)
 
 
+@cli.group()
+def stackexchange_corpus():
+    pass
+
+
+@stackexchange_corpus.command(name="create")
+@click.argument("posts_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("comments_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("users_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("corpus_db", type=click.Path(dir_okay=False))
+def stackexchange_corpus_create(posts_file, comments_file, users_file, corpus_db):
+    """
+    Create a simple corpus database from the stackexchange XML data dumps.
+
+    The data dumps for all sites can be found here:
+    https://archive.org/download/stackexchange
+
+    If the corpus exists already, the content will be replaced with the
+    contents of the files.
+
+    """
+    click.echo(f"Replacing existing contents of {corpus_db} with {posts_file}.")
+
+    doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
+
+    doc_corpus.replace_docs(posts_file, comments_file, users_file)
+
+
+@stackexchange_corpus.command(name="index")
+@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
+@click.argument("index_db", type=click.Path(dir_okay=False))
+def stackexchange_corpus_index(corpus_db, index_db):
+    """
+    Creates the index database representing the given Stack Exchange corpus.
+
+    If the index already exists it will be reindexed.
+
+    """
+    click.echo(f"Indexing {corpus_db} into {index_db}.")
+
+    doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
+    doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
+
+    doc_index.index()
+
+
+@stackexchange_corpus.command(name="serve")
+@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
+@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
+def stackexchange_corpus_serve(corpus_db, index_db):
+    """
+    Serve the given StackExchange corpus and index via the webserver.
+
+    """
+
+    if not hyperreal.index.Index.is_index_db(index_db):
+        raise ValueError(f"{index_db} is not a valid index file.")
+
+    click.echo(f"Serving corpus '{corpus_db}'/ index '{index_db}'.")
+
+    mp_context = mp.get_context("spawn")
+    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+        index_server = hyperreal.server.SingleIndexServer(
+            index_db,
+            corpus_class=hyperreal.corpus.StackExchangeCorpus,
+            corpus_args=[corpus_db],
+            pool=pool,
+            mp_context=mp_context,
+        )
+        hyperreal.server.launch_web_server(index_server)
+
+
 @cli.command()
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
 @click.option("--iterations", default=10)
