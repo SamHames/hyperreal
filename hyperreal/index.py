@@ -16,7 +16,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from typing import Any
+from typing import Any, Union
 
 
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
@@ -121,6 +121,10 @@ class CorpusMissingError(AttributeError):
     pass
 
 
+FeatureKey = tuple[str, Any]
+FeatureKeyOrId = Union[FeatureKey, int]
+
+
 def requires_corpus(func):
     """
     Mark method as requiring a corpus object.
@@ -158,8 +162,8 @@ class Index:
         self.db_path = db_path
         self.db = db_utilities.connect_sqlite(self.db_path)
 
-        self.mp_context = mp_context or mp.get_context("spawn")
-        self.pool = pool or cf.ProcessPoolExecutor(mp_context=self.mp_context)
+        self._mp_context = mp_context
+        self._pool = pool
 
         for statement in """
             pragma synchronous=NORMAL;
@@ -196,6 +200,21 @@ class Index:
 
         self.corpus = corpus
 
+    @property
+    def mp_context(self):
+        if self._mp_context is None:
+            self._mp_context = mp.get_context("spawn")
+
+        return self._mp_context
+
+    @property
+    def pool(self):
+        """Lazily initialised multiprocessing pool if none is provided on init."""
+        if self._pool is None:
+            self._pool = cf.ProcessPoolExecutor(mp_context=self.mp_context)
+
+        return self._pool
+
     @classmethod
     def is_index_db(cls, db_path):
         """Returns True if a db exists at db_path and is an index db."""
@@ -210,7 +229,7 @@ class Index:
     def close(self):
         self.db.close()
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Union[FeatureKey, int, slice]) -> BitMap:
         """key can either be a feature_id integer, a (field, value) tuple, or a slice of (field, value)'s indicating a range."""
 
         if isinstance(key, int):
@@ -262,7 +281,7 @@ class Index:
             self.db.execute("release load_slice")
             return results
 
-    def __setitem__(self, key: Sequence[str, Any], doc_ids: AbstractBitMap) -> None:
+    def __setitem__(self, key: tuple[str, Any], doc_ids: AbstractBitMap) -> None:
         """
         Create a new feature in the index.
 
@@ -303,7 +322,7 @@ class Index:
         else:
             raise KeyError(f"Feature with id '{feature_id}' not found.")
 
-    def lookup_feature_id(self, key: Sequence[str, Any]) -> int:
+    def lookup_feature_id(self, key: tuple[str, Any]) -> int:
         """Lookup the (field, value) for this feature by feature_id."""
 
         results = list(
@@ -808,7 +827,7 @@ class Index:
             # set of features, at the cost of more time for each subiteration.
             for sub_iter in range(sub_iterations):
 
-                futures = set()
+                futures: set[cf.Future] = set()
                 # This approach ensures that each subiteration is of
                 # approximately the same size with respect to the number of
                 # features.
@@ -893,6 +912,37 @@ class Index:
         )
 
         self.db.execute("release refine")
+
+    def measure_within_clusters_feature_similarity(
+        self, cluster_ids=None, min_similarity=0.1
+    ):
+        """
+        Compute all pairwise jaccard similarities within each cluster.
+
+        Returns sorted lists of all feature similarities above the threshold within each cluster.
+
+        """
+
+        futures: set[cf.Future] = set()
+
+        for cluster_id in cluster_ids or self.cluster_ids:
+
+            futures.add(
+                self.pool.submit(
+                    _measure_within_cluster_feature_similarity,
+                    self.db_path,
+                    cluster_id,
+                    min_similarity,
+                )
+            )
+
+        similarities = {}
+
+        for future in cf.as_completed(futures):
+            cluster_id, cluster_similarities = future.result()
+            similarities[cluster_id] = cluster_similarities
+
+        return similarities
 
 
 def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
@@ -1124,3 +1174,58 @@ def measure_features_to_feature_group(
     index.close()
 
     return group_key, return_features, result_delta, already_in, objective
+
+
+def _measure_within_cluster_feature_similarity(
+    index_db_path, cluster_id: int, min_similarity: float
+) -> tuple[int, list[tuple[float, int, int]]]:
+    """Return all within cluster jaccard similarities between features above min_similarity."""
+
+    index = Index(index_db_path)
+
+    similarities = []
+
+    index.db.execute("savepoint within_cluster")
+
+    search_order = index.db.execute(
+        """
+        select
+            feature_cluster.feature_id,
+            feature_cluster.docs_count,
+            doc_ids
+        from feature_cluster
+        inner join inverted_index using(feature_id)
+        where cluster_id = ?
+        order by feature_cluster.docs_count
+        """,
+        [cluster_id],
+    )
+
+    for feature_id, docs_count, doc_ids in search_order:
+
+        max_count = docs_count / min_similarity
+
+        comparison_order = index.db.execute(
+            """
+            select
+                feature_cluster.feature_id,
+                doc_ids
+            from feature_cluster
+            inner join inverted_index using(feature_id)
+            where cluster_id = ?
+                and feature_cluster.docs_count between ? and ?
+                and feature_id != ?
+            """,
+            [cluster_id, docs_count, max_count, feature_id],
+        )
+
+        for comparison_feature, comparison_doc_ids in comparison_order:
+
+            sim = doc_ids.jaccard_index(comparison_doc_ids)
+
+            if sim >= min_similarity:
+                heapq.heappush(similarities, (sim, feature_id, comparison_feature))
+
+    index.db.execute("release within_cluster")
+
+    return cluster_id, sorted(similarities, reverse=True)
