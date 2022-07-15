@@ -780,7 +780,7 @@ class Index:
         cluster_feature: dict[Hashable, set[int]],
         iterations: int = 10,
         sub_iterations: int = 2,
-        group_test=False,
+        group_test: bool = False,
     ):
         """
         Low level function for iteratively refining a feature clustering.
@@ -805,6 +805,8 @@ class Index:
             cluster_id for cluster_id, features in cluster_feature.items() if features
         ]
         total_objective = 0
+
+        available_workers = self.pool._max_workers
 
         for iteration in range(iterations):
 
@@ -833,44 +835,59 @@ class Index:
                 # somewhere else
                 n_clusters = len(cluster_ids)
 
-                # At this point, we test against randomised groupings of batches
-                # to find a comparison group to start with. This lets us scale
-                # sublinearly with the number of clusters.
-                # TODO: for a small number of clusters, we can probably skip
-                # the batch tests and just go directly to the next step.
-                n_batches = max(
-                    math.ceil((n_clusters) ** 0.5), min(16, n_clusters // 2)
-                )
+                # Group testing only two instances doesn't make sense,
+                # so if we have plenty of CPU availability, we can skip
+                # straight to dense comparisons.
+                cluster_worker_ratio = n_clusters / available_workers
 
-                # Assemble random batches of clusters to check against.
-                group_features = {
-                    tuple(cluster_ids[i::n_batches]): {
-                        feature
-                        for cluster_id in cluster_ids[i::n_batches]
-                        for feature in cluster_feature[cluster_id]
+                if group_test and cluster_worker_ratio >= 2:
+
+                    # The square root heuristic here let's us spend roughly
+                    # the same time on the group tests and the detailed
+                    # tests.
+                    n_batches = math.ceil(n_clusters**0.5)
+
+                    print(f"Group testing with {n_batches} batches")
+
+                    # Assemble random batches of clusters to check against.
+                    group_features = {
+                        tuple(cluster_ids[i::n_batches]): {
+                            feature
+                            for cluster_id in cluster_ids[i::n_batches]
+                            for feature in cluster_feature[cluster_id]
+                        }
+                        for i in range(n_batches)
                     }
-                    for i in range(n_batches)
-                }
 
-                # Check all of the features against all of the batches
-                group_checks = {
-                    group_key: moving_features for group_key in group_features
-                }
+                    # Check all of the features against all of the batches
+                    group_tests = {
+                        group_key: moving_features for group_key in group_features
+                    }
 
-                batch_assignments, _ = self._calculate_assignments(
-                    group_features, group_checks
-                )
+                    batch_assignments, _ = self._calculate_assignments(
+                        group_features, group_tests
+                    )
 
-                # Convert the group tests into individual cluster tests
-                cluster_tests = collections.defaultdict(set)
+                    # Convert the group tests into individual cluster tests
+                    cluster_tests = collections.defaultdict(set)
 
-                for feature, (_, check_keys) in batch_assignments.items():
-                    # Test against the current cluster
-                    cluster_tests[feature_cluster[feature]].add(feature)
+                    for feature, (_, check_keys) in batch_assignments.items():
+                        # Test against the current cluster
+                        cluster_tests[feature_cluster[feature]].add(feature)
 
-                    # Test against each of the clusters in the best batches
-                    for cluster_id in check_keys:
-                        cluster_tests[cluster_id].add(feature)
+                        # Test against each of the clusters in the best batches
+                        for cluster_id in check_keys:
+                            cluster_tests[cluster_id].add(feature)
+
+                # Too few clusters, or group testing turned off: check all against all
+                else:
+                    if cluster_worker_ratio < 2:
+                        print(
+                            "Too few clusters for group testing, skipping to dense checks."
+                        )
+                    cluster_tests = {
+                        cluster_id: moving_features for cluster_id in cluster_ids
+                    }
 
                 previous_objective = total_objective
 
@@ -932,7 +949,10 @@ class Index:
             cluster_feature[cluster_id].add(feature_id)
 
         cluster_feature = self._refine_feature_groups(
-            cluster_feature, iterations=iterations, sub_iterations=sub_iterations
+            cluster_feature,
+            iterations=iterations,
+            sub_iterations=sub_iterations,
+            group_test=True,
         )
 
         # Serialise the actual results of the clustering!
