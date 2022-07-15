@@ -16,7 +16,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from typing import Any, Union
+from typing import Any, Union, Hashable
 
 
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
@@ -775,44 +775,35 @@ class Index:
 
         return assignments, total_objective
 
-    def refine_clusters(
+    def _refine_feature_groups(
         self,
+        cluster_feature: dict[Hashable, set[int]],
         iterations: int = 10,
         sub_iterations: int = 2,
+        group_test=False,
     ):
         """
-        Attempt to improve the model clustering of the features for `iterations`.
+        Low level function for iteratively refining a feature clustering.
+
+        cluster_features is a mapping from a cluster_key to a set of feature_ids.
+
+        This is most useful if you want to explore specific clustering
+        approaches without the constraint of the saved clusters.
 
         """
 
-        if iterations < 1:
-            raise ValueError(
-                f"You must specificy at least one iteration, provided '{iterations}'."
-            )
-        if sub_iterations < 1:
-            raise ValueError(
-                f"You must specificy at least one subiteration, provided '{sub_iterations}'."
-            )
-
-        self.db.execute("savepoint refine")
-
-        # Establish forward reverse mappings of features to clusters and vice versa.
-        feature_cluster = dict()
-        cluster_feature = collections.defaultdict(set)
-
-        for feature_id, cluster_id in self.db.execute(
-            """
-            select
-                feature_id,
-                cluster_id
-            from feature_cluster
-            """
-        ):
-            feature_cluster[feature_id] = cluster_id
-            cluster_feature[cluster_id].add(feature_id)
+        feature_cluster = {
+            feature_id: cluster_id
+            for cluster_id, features in cluster_feature.items()
+            for feature_id in features
+        }
 
         features = list(feature_cluster)
-        cluster_ids = list(cluster_feature)
+
+        # Prune empty clusters.
+        cluster_ids = [
+            cluster_id for cluster_id, features in cluster_feature.items() if features
+        ]
         total_objective = 0
 
         for iteration in range(iterations):
@@ -904,12 +895,56 @@ class Index:
                     if len(values)
                 ]
 
+        return cluster_feature
+
+    def refine_clusters(
+        self,
+        iterations: int = 10,
+        sub_iterations: int = 2,
+    ):
+        """
+        Attempt to improve the model clustering of the features for `iterations`.
+
+        """
+
+        if iterations < 1:
+            raise ValueError(
+                f"You must specificy at least one iteration, provided '{iterations}'."
+            )
+        if sub_iterations < 1:
+            raise ValueError(
+                f"You must specificy at least one subiteration, provided '{sub_iterations}'."
+            )
+
+        self.db.execute("savepoint refine")
+
+        # Establish forward reverse mappings of features to clusters and vice versa.
+        cluster_feature = collections.defaultdict(set)
+
+        for feature_id, cluster_id in self.db.execute(
+            """
+            select
+                feature_id,
+                cluster_id
+            from feature_cluster
+            """
+        ):
+            cluster_feature[cluster_id].add(feature_id)
+
+        cluster_feature = self._refine_feature_groups(
+            cluster_feature, iterations=iterations, sub_iterations=sub_iterations
+        )
+
         # Serialise the actual results of the clustering!
         self.db.executemany(
             """
-            update feature_cluster set cluster_id = ?2 where feature_id = ?1
+            update feature_cluster set cluster_id = ?1 where feature_id = ?2
             """,
-            feature_cluster.items(),
+            (
+                (cluster_id, feature_id)
+                for cluster_id, features in cluster_feature.items()
+                for feature_id in features
+            ),
         )
 
         self.db.execute("release refine")
