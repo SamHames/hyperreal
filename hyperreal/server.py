@@ -1,17 +1,5 @@
 """
-WARNING: EXPERIMENTAL!
-
-This is all prototype only right now, you shouldn't rely on any part of this
-to be stable or consistent.
-
-The server consists of the following components:
-
-1. Starlette as the web frontend, and a single loaded index on the app
-state. This is the index specified on the command line to run the
-webserver on top.
-
-The whole web frontend runs as a single process: all CPU intensive tasks
-need to be defered to the process pool.
+Cherrypy based webserver for serving an index (or in future) a set of indexes.
 
 """
 import argparse
