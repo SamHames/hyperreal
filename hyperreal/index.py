@@ -123,6 +123,7 @@ class CorpusMissingError(AttributeError):
 
 FeatureKey = tuple[str, Any]
 FeatureKeyOrId = Union[FeatureKey, int]
+FeatureIdAndKey = tuple[int, str, Any]
 
 
 def requires_corpus(func):
@@ -1178,7 +1179,7 @@ def measure_features_to_feature_group(
 
 def _measure_within_cluster_feature_similarity(
     index_db_path, cluster_id: int, min_similarity: float
-) -> tuple[int, list[tuple[float, int, int]]]:
+) -> tuple[int, list[tuple[float, FeatureIdAndKey, FeatureIdAndKey]]]:
     """Return all within cluster jaccard similarities between features above min_similarity."""
 
     index = Index(index_db_path)
@@ -1191,17 +1192,20 @@ def _measure_within_cluster_feature_similarity(
         """
         select
             feature_cluster.feature_id,
+            inverted_index.field,
+            inverted_index.value,
             feature_cluster.docs_count,
             doc_ids
         from feature_cluster
         inner join inverted_index using(feature_id)
         where cluster_id = ?
-        order by feature_cluster.docs_count
+        -- Break ties with feature_id to avoid duplicate work
+        order by feature_cluster.docs_count, feature_cluster.feature_id
         """,
         [cluster_id],
     )
 
-    for feature_id, docs_count, doc_ids in search_order:
+    for feature_id, field, value, docs_count, doc_ids in search_order:
 
         max_count = docs_count / min_similarity
 
@@ -1209,22 +1213,32 @@ def _measure_within_cluster_feature_similarity(
             """
             select
                 feature_cluster.feature_id,
+                inverted_index.field,
+                inverted_index.value,
                 doc_ids
             from feature_cluster
             inner join inverted_index using(feature_id)
-            where cluster_id = ?
-                and feature_cluster.docs_count between ? and ?
-                and feature_id != ?
+            where cluster_id = ?1
+                and (feature_cluster.docs_count, feature_id) >= (?2, ?4)
+                and feature_cluster.docs_count <= ?3
+                and feature_id != ?4
             """,
             [cluster_id, docs_count, max_count, feature_id],
         )
 
-        for comparison_feature, comparison_doc_ids in comparison_order:
+        for comp_feature, comp_field, comp_value, comp_doc_ids in comparison_order:
 
-            sim = doc_ids.jaccard_index(comparison_doc_ids)
+            sim = doc_ids.jaccard_index(comp_doc_ids)
 
             if sim >= min_similarity:
-                heapq.heappush(similarities, (sim, feature_id, comparison_feature))
+                heapq.heappush(
+                    similarities,
+                    (
+                        sim,
+                        (feature_id, field, value),
+                        (comp_feature, comp_field, comp_value),
+                    ),
+                )
 
     index.db.execute("release within_cluster")
 
