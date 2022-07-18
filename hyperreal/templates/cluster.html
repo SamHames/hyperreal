@@ -20,10 +20,19 @@
         <button type="submit" formaction="/index/{{ index_id }}/cluster/create" method="post">Create New Cluster</button>
     </form>
 </details>
+
 <ul class="compact-cluster">
-    {% for feature_id, field, value, count in features %}
-    <li><a class="feature-link" href="/index/{{ index_id }}/cluster/{{cluster_id}}?feature_id={{ feature_id }}">{{ field }}: {{ value }}</a> ({{ count }})</li>
+
+    {% for feature_id, field, value, score in features %}
+    <li>
+        <a class="feature-link" href="/index/{{ index_id }}/cluster/{{ cluster_id }}?feature_id={{ feature_id }}">
+            <div class="feature">
+                <span class="field">{{ field }}</span>
+                <span class="value">{{ value }}</span></div>
+        </a>
+    </li>
     {% endfor %}
+
 </ul>
 
 {% endblock %}

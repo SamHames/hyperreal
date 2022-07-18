@@ -29,7 +29,13 @@
     <li>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li><a class="feature-link" href=/index/{{ index_id }}/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
+            <li>
+                <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
+                    <div class="feature">
+                        <span class="field">{{ field }}</span>
+                        <span class="value">{{ value }}</span></div>
+                </a>
+            </li>
             {% endfor %}
             <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">...</a>
         </ul>
@@ -57,7 +63,13 @@
     <li>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li><a class="feature-link" href=/index/{{ index_id }}/?feature_id={{ feature_id }}>{{ field }}: {{ value }}</a><!-- ({{ score }}) --></li>
+            <li>
+                <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
+                    <div class="feature">
+                        <span class="field">{{ field }}</span>
+                        <span class="value">{{ value }}</span></div>
+                </a>
+            </li>
             {% endfor %}
             <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">...</a>
         </ul>
