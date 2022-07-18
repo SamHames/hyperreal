@@ -16,7 +16,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from typing import Any, Union, Hashable
+from typing import Any, Union, Hashable, Optional
 
 
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
@@ -746,6 +746,7 @@ class Index:
                     group_checks[group_key],
                 )
                 for group_key, features in group_features.items()
+                if group_key in group_checks
             ),
             key=lambda x: len(x[2]) + len(x[3]),
             reverse=True,
@@ -847,8 +848,6 @@ class Index:
                     # tests.
                     n_batches = math.ceil(n_clusters**0.5)
 
-                    print(f"Group testing with {n_batches} batches")
-
                     # Assemble random batches of clusters to check against.
                     group_features = {
                         tuple(cluster_ids[i::n_batches]): {
@@ -881,10 +880,7 @@ class Index:
 
                 # Too few clusters, or group testing turned off: check all against all
                 else:
-                    if cluster_worker_ratio < 2:
-                        print(
-                            "Too few clusters for group testing, skipping to dense checks."
-                        )
+
                     cluster_tests = {
                         cluster_id: moving_features for cluster_id in cluster_ids
                     }
@@ -905,14 +901,47 @@ class Index:
                     cluster_feature[cluster_id].add(feature)
                     feature_cluster[feature] = cluster_id
 
-                # Prune emptied clusters
+                # Prune emptied clusters from ids
                 cluster_ids = [
                     cluster_id
                     for cluster_id, values in cluster_feature.items()
                     if len(values)
                 ]
 
+        # prune empty clusters before returning
+        cluster_feature = {
+            cluster_id: features
+            for cluster_id, features in cluster_feature.items()
+            if features
+        }
+
         return cluster_feature
+
+    def propose_cluster_split(
+        self,
+        cluster_id,
+        k: Optional[int] = None,
+        iterations: int = 10,
+        sub_iterations: int = 2,
+        group_test: bool = True,
+    ):
+        """Compute a proposed split of the given cluster.
+
+        k specifies the number of a splits, if left at the default of None, it
+        will be automatically split as the sqrt(number of features).
+
+        """
+        cluster_features = self.cluster_features(cluster_id)
+        k = k or math.ceil(len(cluster_features) ** 0.5)
+
+        feature_ids = [r[0] for r in cluster_features]
+        random.shuffle(feature_ids)
+
+        split_cluster_features = {i: set(feature_ids[i::k]) for i in range(k)}
+
+        return self._refine_feature_groups(
+            split_cluster_features, iterations, sub_iterations, group_test
+        )
 
     def refine_clusters(
         self,
