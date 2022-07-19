@@ -35,19 +35,17 @@ plain_text_tokenizer = regex.compile(
 
 def social_media_tokens(entry):
     cleaned = social_media_cleaner.sub("", entry.lower())
-    return [token for token in word_tokenizer.split(cleaned) if token]
+    return [token for token in word_tokenizer.split(cleaned) if token.strip()]
 
 
 def tokens(entry):
     cleaned = entry.lower()
-    return [token for token in word_tokenizer.split(cleaned) if token]
+    return [token for token in word_tokenizer.split(cleaned) if token.strip()]
 
 
-class MLStripper(HTMLParser):
+class HTMLTextLines(HTMLParser):
     """
-    Strips tags from the provided HTML, retaining only the base text.
-
-    Via https://stackoverflow.com/questions/753052/strip-html-from-strings-in-python
+    Parser for extracting the text from the data elements of given HTML.
 
     """
 
@@ -56,16 +54,22 @@ class MLStripper(HTMLParser):
         self.reset()
         self.strict = False
         self.convert_charrefs = True
-        self.text = StringIO()
+        self.lines = []
 
     def handle_data(self, d):
-        self.text.write(d)
+        self.lines.append(d)
 
-    def get_data(self):
-        return self.text.getvalue()
+    def get_lines(self):
+        return self.lines
 
 
-def strip_tags(html):
-    s = MLStripper()
+def text_from_html(html):
+    """
+    Returns a list of the text contained in the data elements of the given HTML string.
+
+    """
+    s = HTMLTextLines()
     s.feed(html)
-    return s.get_data()
+    lines = s.get_lines()
+    s.close()
+    return lines
