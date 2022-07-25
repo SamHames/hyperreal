@@ -491,8 +491,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     def index(self, doc):
         return {
             "Post": hyperreal.utilities.tokens(
-                hyperreal.utilities.strip_tags(
-                    (doc["Title"] or "") + " " + (doc["Body"] or "")
+                (doc["Title"] or "")
+                + " "
+                + " ".join(
+                    l.strip()
+                    for l in hyperreal.utilities.text_from_html(doc["Body"] or "")
                 )
             ),
             "Tag": doc["Tags"],

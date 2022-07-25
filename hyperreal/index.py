@@ -16,7 +16,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from typing import Any, Union
+from typing import Any, Union, Hashable, Optional
 
 
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
@@ -746,6 +746,7 @@ class Index:
                     group_checks[group_key],
                 )
                 for group_key, features in group_features.items()
+                if group_key in group_checks
             ),
             key=lambda x: len(x[2]) + len(x[3]),
             reverse=True,
@@ -775,45 +776,38 @@ class Index:
 
         return assignments, total_objective
 
-    def refine_clusters(
+    def _refine_feature_groups(
         self,
+        cluster_feature: dict[Hashable, set[int]],
         iterations: int = 10,
         sub_iterations: int = 2,
+        group_test: bool = False,
     ):
         """
-        Attempt to improve the model clustering of the features for `iterations`.
+        Low level function for iteratively refining a feature clustering.
+
+        cluster_features is a mapping from a cluster_key to a set of feature_ids.
+
+        This is most useful if you want to explore specific clustering
+        approaches without the constraint of the saved clusters.
 
         """
 
-        if iterations < 1:
-            raise ValueError(
-                f"You must specificy at least one iteration, provided '{iterations}'."
-            )
-        if sub_iterations < 1:
-            raise ValueError(
-                f"You must specificy at least one subiteration, provided '{sub_iterations}'."
-            )
-
-        self.db.execute("savepoint refine")
-
-        # Establish forward reverse mappings of features to clusters and vice versa.
-        feature_cluster = dict()
-        cluster_feature = collections.defaultdict(set)
-
-        for feature_id, cluster_id in self.db.execute(
-            """
-            select
-                feature_id,
-                cluster_id
-            from feature_cluster
-            """
-        ):
-            feature_cluster[feature_id] = cluster_id
-            cluster_feature[cluster_id].add(feature_id)
+        feature_cluster = {
+            feature_id: cluster_id
+            for cluster_id, features in cluster_feature.items()
+            for feature_id in features
+        }
 
         features = list(feature_cluster)
-        cluster_ids = list(cluster_feature)
+
+        # Prune empty clusters.
+        cluster_ids = [
+            cluster_id for cluster_id, features in cluster_feature.items() if features
+        ]
         total_objective = 0
+
+        available_workers = self.pool._max_workers
 
         for iteration in range(iterations):
 
@@ -842,44 +836,54 @@ class Index:
                 # somewhere else
                 n_clusters = len(cluster_ids)
 
-                # At this point, we test against randomised groupings of batches
-                # to find a comparison group to start with. This lets us scale
-                # sublinearly with the number of clusters.
-                # TODO: for a small number of clusters, we can probably skip
-                # the batch tests and just go directly to the next step.
-                n_batches = max(
-                    math.ceil((n_clusters) ** 0.5), min(16, n_clusters // 2)
-                )
+                # Group testing only two instances doesn't make sense,
+                # so if we have plenty of CPU availability, we can skip
+                # straight to dense comparisons.
+                cluster_worker_ratio = n_clusters / available_workers
 
-                # Assemble random batches of clusters to check against.
-                group_features = {
-                    tuple(cluster_ids[i::n_batches]): {
-                        feature
-                        for cluster_id in cluster_ids[i::n_batches]
-                        for feature in cluster_feature[cluster_id]
+                if group_test and cluster_worker_ratio >= 2:
+
+                    # The square root heuristic here let's us spend roughly
+                    # the same time on the group tests and the detailed
+                    # tests.
+                    n_batches = math.ceil(n_clusters**0.5)
+
+                    # Assemble random batches of clusters to check against.
+                    group_features = {
+                        tuple(cluster_ids[i::n_batches]): {
+                            feature
+                            for cluster_id in cluster_ids[i::n_batches]
+                            for feature in cluster_feature[cluster_id]
+                        }
+                        for i in range(n_batches)
                     }
-                    for i in range(n_batches)
-                }
 
-                # Check all of the features against all of the batches
-                group_checks = {
-                    group_key: moving_features for group_key in group_features
-                }
+                    # Check all of the features against all of the batches
+                    group_tests = {
+                        group_key: moving_features for group_key in group_features
+                    }
 
-                batch_assignments, _ = self._calculate_assignments(
-                    group_features, group_checks
-                )
+                    batch_assignments, _ = self._calculate_assignments(
+                        group_features, group_tests
+                    )
 
-                # Convert the group tests into individual cluster tests
-                cluster_tests = collections.defaultdict(set)
+                    # Convert the group tests into individual cluster tests
+                    cluster_tests = collections.defaultdict(set)
 
-                for feature, (_, check_keys) in batch_assignments.items():
-                    # Test against the current cluster
-                    cluster_tests[feature_cluster[feature]].add(feature)
+                    for feature, (_, check_keys) in batch_assignments.items():
+                        # Test against the current cluster
+                        cluster_tests[feature_cluster[feature]].add(feature)
 
-                    # Test against each of the clusters in the best batches
-                    for cluster_id in check_keys:
-                        cluster_tests[cluster_id].add(feature)
+                        # Test against each of the clusters in the best batches
+                        for cluster_id in check_keys:
+                            cluster_tests[cluster_id].add(feature)
+
+                # Too few clusters, or group testing turned off: check all against all
+                else:
+
+                    cluster_tests = {
+                        cluster_id: moving_features for cluster_id in cluster_ids
+                    }
 
                 previous_objective = total_objective
 
@@ -897,19 +901,99 @@ class Index:
                     cluster_feature[cluster_id].add(feature)
                     feature_cluster[feature] = cluster_id
 
-                # Prune emptied clusters
+                # Prune emptied clusters from ids
                 cluster_ids = [
                     cluster_id
                     for cluster_id, values in cluster_feature.items()
                     if len(values)
                 ]
 
+        # prune empty clusters before returning
+        cluster_feature = {
+            cluster_id: features
+            for cluster_id, features in cluster_feature.items()
+            if features
+        }
+
+        return cluster_feature
+
+    def propose_cluster_split(
+        self,
+        cluster_id,
+        k: Optional[int] = None,
+        iterations: int = 10,
+        sub_iterations: int = 2,
+        group_test: bool = True,
+    ):
+        """Compute a proposed split of the given cluster.
+
+        k specifies the number of a splits, if left at the default of None, it
+        will be automatically split as the sqrt(number of features).
+
+        """
+        cluster_features = self.cluster_features(cluster_id)
+        k = k or math.ceil(len(cluster_features) ** 0.5)
+
+        feature_ids = [r[0] for r in cluster_features]
+        random.shuffle(feature_ids)
+
+        split_cluster_features = {i: set(feature_ids[i::k]) for i in range(k)}
+
+        return self._refine_feature_groups(
+            split_cluster_features, iterations, sub_iterations, group_test
+        )
+
+    def refine_clusters(
+        self,
+        iterations: int = 10,
+        sub_iterations: int = 2,
+    ):
+        """
+        Attempt to improve the model clustering of the features for `iterations`.
+
+        """
+
+        if iterations < 1:
+            raise ValueError(
+                f"You must specificy at least one iteration, provided '{iterations}'."
+            )
+        if sub_iterations < 1:
+            raise ValueError(
+                f"You must specificy at least one subiteration, provided '{sub_iterations}'."
+            )
+
+        self.db.execute("savepoint refine")
+
+        # Establish forward reverse mappings of features to clusters and vice versa.
+        cluster_feature = collections.defaultdict(set)
+
+        for feature_id, cluster_id in self.db.execute(
+            """
+            select
+                feature_id,
+                cluster_id
+            from feature_cluster
+            """
+        ):
+            cluster_feature[cluster_id].add(feature_id)
+
+        cluster_feature = self._refine_feature_groups(
+            cluster_feature,
+            iterations=iterations,
+            sub_iterations=sub_iterations,
+            group_test=True,
+        )
+
         # Serialise the actual results of the clustering!
         self.db.executemany(
             """
-            update feature_cluster set cluster_id = ?2 where feature_id = ?1
+            update feature_cluster set cluster_id = ?1 where feature_id = ?2
             """,
-            feature_cluster.items(),
+            (
+                (cluster_id, feature_id)
+                for cluster_id, features in cluster_feature.items()
+                for feature_id in features
+            ),
         )
 
         self.db.execute("release refine")

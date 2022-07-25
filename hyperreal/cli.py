@@ -56,7 +56,8 @@ def plaintext_corpus_create(text_file, corpus_db):
 @plaintext_corpus.command(name="index")
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
-def plaintext_corpus_index(corpus_db, index_db):
+@click.option("--processes", type=int, default=None)
+def plaintext_corpus_index(corpus_db, index_db, processes):
     """
     Creates the index database representing the given plaintext corpus.
 
@@ -68,7 +69,7 @@ def plaintext_corpus_index(corpus_db, index_db):
     doc_corpus = hyperreal.corpus.PlainTextSqliteCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index()
+    doc_index.index(n_cpus=processes)
 
 
 @plaintext_corpus.command(name="serve")
@@ -128,7 +129,8 @@ def stackexchange_corpus_create(posts_file, comments_file, users_file, corpus_db
 @stackexchange_corpus.command(name="index")
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
-def stackexchange_corpus_index(corpus_db, index_db):
+@click.option("--processes", type=int, default=None)
+def stackexchange_corpus_index(corpus_db, index_db, processes):
     """
     Creates the index database representing the given Stack Exchange corpus.
 
@@ -140,7 +142,7 @@ def stackexchange_corpus_index(corpus_db, index_db):
     doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index()
+    doc_index.index(n_cpus=processes)
 
 
 @stackexchange_corpus.command(name="serve")
