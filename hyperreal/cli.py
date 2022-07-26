@@ -56,8 +56,15 @@ def plaintext_corpus_create(text_file, corpus_db):
 @plaintext_corpus.command(name="index")
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
-@click.option("--processes", type=int, default=None)
-def plaintext_corpus_index(corpus_db, index_db, processes):
+@click.option(
+    "--doc_batch_size",
+    type=int,
+    default=10000,
+    help="The size of individual batches of documents sent for indexing. "
+    "Larger sizes will require more ram, but might be more efficient for "
+    "large collections.",
+)
+def plaintext_corpus_index(corpus_db, index_db, doc_batch_size):
     """
     Creates the index database representing the given plaintext corpus.
 
@@ -69,7 +76,7 @@ def plaintext_corpus_index(corpus_db, index_db, processes):
     doc_corpus = hyperreal.corpus.PlainTextSqliteCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index(n_cpus=processes)
+    doc_index.index(doc_batch_size=doc_batch_size)
 
 
 @plaintext_corpus.command(name="serve")
@@ -129,8 +136,15 @@ def stackexchange_corpus_create(posts_file, comments_file, users_file, corpus_db
 @stackexchange_corpus.command(name="index")
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
-@click.option("--processes", type=int, default=None)
-def stackexchange_corpus_index(corpus_db, index_db, processes):
+@click.option(
+    "--doc_batch_size",
+    type=int,
+    default=10000,
+    help="The size of individual batches of documents sent for indexing. "
+    "Larger sizes will require more ram, but might be more efficient for "
+    "large collections.",
+)
+def stackexchange_corpus_index(corpus_db, index_db, doc_batch_size):
     """
     Creates the index database representing the given Stack Exchange corpus.
 
@@ -142,7 +156,7 @@ def stackexchange_corpus_index(corpus_db, index_db, processes):
     doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index(n_cpus=processes)
+    doc_index.index(doc_batch_size=doc_batch_size)
 
 
 @stackexchange_corpus.command(name="serve")

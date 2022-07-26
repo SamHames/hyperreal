@@ -50,10 +50,7 @@ def test_indexing(tmp_path, corpus, args, kwargs):
 
     # These are actually very bad settings, but necessary for checking
     # all code paths and concurrency.
-    i.index(
-        batch_key_size=10,
-        max_batch_entries=1000,
-    )
+    i.index(doc_batch_size=10)
 
     # Compare against the actual test data.
     with open("tests/data/alice30.txt", "r", encoding="utf-8") as f:
