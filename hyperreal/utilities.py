@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 from io import StringIO
 
+from pyroaring import BitMap
 import regex
 
 
@@ -73,3 +74,31 @@ def text_from_html(html):
     lines = s.get_lines()
     s.close()
     return lines
+
+
+def bstm(matching, bitslice, top_k):
+    """
+    Applies the bit sliced term matching procedure.
+
+    """
+
+    if len(matching) <= top_k:
+        return matching
+
+    e = matching.copy()
+    g = BitMap()
+
+    for i in reversed(range(len(bitslice))):
+        x = g | (e & bitslice[i])
+        n = len(x)
+
+        if n > top_k:
+            e &= bitslice[i]
+        elif n < top_k:
+            g = x
+            e -= bitslice[i]
+        else:
+            e &= bitslice[i]
+            break
+
+    return g | e

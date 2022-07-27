@@ -124,6 +124,7 @@ class CorpusMissingError(AttributeError):
 FeatureKey = tuple[str, Any]
 FeatureKeyOrId = Union[FeatureKey, int]
 FeatureIdAndKey = tuple[int, str, Any]
+BitSlice = list[BitMap]
 
 
 def requires_corpus(func):
@@ -342,9 +343,9 @@ class Index:
     def index(
         self,
         raise_on_missing=True,
+        doc_batch_size=100000,
+        merge_batches=10,
         n_cpus=None,
-        batch_key_size=1000,
-        max_batch_entries=10_000_000,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -364,13 +365,7 @@ class Index:
         """
         self.db.execute("savepoint reindex")
 
-        n_cpus = n_cpus or mp.cpu_count()
-
-        manager = self.mp_context.Manager()
-
-        # Note the size limit here, to provide backpressure and avoid
-        # materialising keys too far in advance of the worker processes.
-        process_queue = manager.Queue(n_cpus * 3)
+        workers = self.pool._max_workers
 
         try:
             # We're still inside a transaction here, so processes reading from
@@ -382,27 +377,15 @@ class Index:
             # sequentially
             doc_keys = enumerate(self.corpus.keys())
 
-            batch_doc_ids = []
-            batch_doc_keys = []
-            batch_size = 0
-
             with tempfile.TemporaryDirectory() as tempdir:
 
-                temporary_db_paths = [
-                    os.path.join(tempdir, str(i)) for i in range(n_cpus)
-                ]
-
-                # Dispatch all of the worker processes
-                futures = [
-                    self.pool.submit(
-                        _index_docs,
-                        self.corpus,
-                        process_queue,
-                        temp_db_path,
-                        max_batch_entries,
-                    )
-                    for temp_db_path in temporary_db_paths
-                ]
+                batch_doc_ids = []
+                batch_doc_keys = []
+                batch_size = 0
+                current_temp_file_counter = 0
+                next_temp_file = os.path.join(tempdir, str(current_temp_file_counter))
+                futures = set()
+                to_merge = collections.defaultdict(list)
 
                 for doc_key in doc_keys:
 
@@ -411,37 +394,162 @@ class Index:
                     batch_doc_keys.append(doc_key[1])
                     batch_size += 1
 
-                    if batch_size >= batch_key_size:
-                        process_queue.put((batch_doc_ids, batch_doc_keys))
+                    if batch_size >= doc_batch_size:
+                        # Dispatch the batch
+                        futures.add(
+                            self.pool.submit(
+                                _index_docs,
+                                self.corpus,
+                                batch_doc_ids,
+                                batch_doc_keys,
+                                next_temp_file,
+                            )
+                        )
                         batch_doc_ids = []
                         batch_doc_keys = []
                         batch_size = 0
+                        current_temp_file_counter += 1
+                        next_temp_file = os.path.join(
+                            tempdir, str(current_temp_file_counter)
+                        )
 
-                else:
-                    if batch_doc_ids:
-                        process_queue.put((batch_doc_ids, batch_doc_keys))
+                        if len(futures) >= workers:
+                            done, futures = cf.wait(
+                                futures, return_when="FIRST_COMPLETED"
+                            )
 
-                for _ in range(n_cpus):
-                    process_queue.put(None)
+                            for f in done:
+                                segment_path, level = f.result()
+                                to_merge[level].append(segment_path)
 
-                temp_dbs = [
-                    db_utilities.connect_sqlite(f.result())
-                    for f in cf.as_completed(futures)
-                ]
+                            print(to_merge)
+                            for level, paths in list(to_merge.items()):
+                                if len(paths) >= merge_batches:
+                                    to_merge[level] = []
+                                    futures.add(
+                                        self.pool.submit(
+                                            _merge_indices,
+                                            next_temp_file,
+                                            level + 1,
+                                            *paths,
+                                        )
+                                    )
+                                    current_temp_file_counter += 1
+                                    next_temp_file = os.path.join(
+                                        tempdir, str(current_temp_file_counter)
+                                    )
 
-                queries = [
-                    db.execute(
-                        "select * from inverted_index_segment order by field, value"
+                # Dispatch the final batch.
+                if batch_doc_keys:
+                    futures.add(
+                        self.pool.submit(
+                            _index_docs,
+                            self.corpus,
+                            batch_doc_ids,
+                            batch_doc_keys,
+                            next_temp_file,
+                        )
                     )
-                    for db in temp_dbs
-                ]
+                    current_temp_file_counter += 1
+                    next_temp_file = os.path.join(
+                        tempdir, str(current_temp_file_counter)
+                    )
 
-                to_merge = heapq.merge(*queries)
+                # Finalise all segment indexing
+                while futures:
+                    done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
 
-                self.__write_merged_segments(to_merge)
+                    for future in done:
+                        segment_path, level = future.result()
+                        to_merge[level].append(segment_path)
 
-                for db in temp_dbs:
-                    db.close()
+                    for level, paths in list(to_merge.items()):
+                        if len(paths) >= merge_batches:
+                            to_merge[level] = []
+                            futures.add(
+                                self.pool.submit(
+                                    _merge_indices,
+                                    next_temp_file,
+                                    level + 1,
+                                    *paths,
+                                )
+                            )
+                            current_temp_file_counter += 1
+                            next_temp_file = os.path.join(
+                                tempdir, str(current_temp_file_counter)
+                            )
+
+                final_merge = self.pool.submit(
+                    _merge_indices,
+                    next_temp_file,
+                    level + 1,
+                    *[p for paths in to_merge.values() for p in paths],
+                )
+
+                final_merge.result()
+
+                # Now merge back to the original index, preserving feature_ids
+                # if this is a reindex operation.
+                # Deleted features will be removed
+                self.db.execute("attach ? as merged", [next_temp_file])
+                self.db.execute(
+                    """
+                    delete from inverted_index 
+                    where (field, value) not in (
+                        select field, value 
+                        from merged.inverted_index_segment
+                    )
+                    """
+                )
+
+                # New features will be inserted
+                self.db.execute(
+                    """
+                    insert into inverted_index(
+                        field, value, docs_count, doc_ids
+                    )
+                        select * 
+                        from merged.inverted_index_segment
+                        where (field, value) not in (
+                            select field, value 
+                            from main.inverted_index
+                        )
+                    """
+                )
+                # Existing features will be updated.
+                self.db.execute(
+                    """
+                    update inverted_index set
+                        (docs_count, doc_ids) = (
+                            select 
+                                docs_count, 
+                                doc_ids
+                            from merged.inverted_index_segment
+                            where (field, value) = (inverted_index.field, inverted_index.value)
+                        )
+                    where (field, value) in (
+                        select field, value
+                        from merged.inverted_index_segment
+                    )
+                    """
+                )
+
+                os.remove(next_temp_file)
+
+            # Write the field summary
+            self.db.execute("delete from field_summary")
+            self.db.execute(
+                """
+                insert into field_summary
+                select
+                    field,
+                    count(*) as distinct_values,
+                    min(value) as min_value,
+                    max(value) as max_value
+                from inverted_index
+                group by field
+                """
+            )
 
         except Exception:
             self.db.execute("rollback to reindex")
@@ -450,60 +558,8 @@ class Index:
         finally:
             # Make sure to nicely cleanup all of the multiprocessing bits and bobs.
             self.db.execute("release reindex")
-            manager.shutdown()
 
-    def __write_merged_segments(self, to_merge):
-
-        self.db.execute("delete from inverted_index")
-
-        current_field, current_value, current_docs = next(to_merge)
-
-        for field, value, doc_ids in to_merge:
-            if (field, value) == (current_field, current_value):
-                # still aggregating this field...
-                current_docs |= doc_ids
-                to_send = False
-            else:
-                # We've hit something new...
-                # output_queue.put((current_field, current_value, current_docs))
-                self.db.execute(
-                    "insert into inverted_index values(null, ?, ?, ?, ?)",
-                    [
-                        current_field,
-                        current_value,
-                        len(current_docs),
-                        current_docs,
-                    ],
-                )
-                (current_field, current_value) = (field, value)
-                current_docs = doc_ids
-                to_send = True
-        else:
-            if to_send:
-                self.db.execute(
-                    "insert into inverted_index values(null, ?, ?, ?, ?)",
-                    [
-                        current_field,
-                        current_value,
-                        len(current_docs),
-                        current_docs,
-                    ],
-                )
-
-        # Write the field summary
-        self.db.execute("delete from field_summary")
-        self.db.execute(
-            """
-            insert into field_summary
-            select
-                field,
-                count(*) as distinct_values,
-                min(value) as min_value,
-                max(value) as max_value
-            from inverted_index
-            group by field
-            """
-        )
+        self.db.execute("detach merged")
 
     def convert_query_to_keys(self, query):
         """Generate the doc_keys one by one for the given query."""
@@ -699,10 +755,19 @@ class Index:
         return cluster_features
 
     def cluster_query(self, cluster_id):
-        """Return the bitset representing docs matching this cluster of features."""
+        """
+        Return matching documents and accumulated bitslice for cluster_id.
+
+        The matching documents are the documents that contain any terms from
+        the cluster. The returned bitslice represents the accumulation of
+        features matching across all features and can be used for ranking
+        with `utilities.bstm`.
+
+        """
 
         self.db.execute("savepoint cluster_docs")
         matching = BitMap()
+        bitslice = [BitMap()]
 
         features = self.db.execute(
             """
@@ -719,9 +784,19 @@ class Index:
         for (doc_ids,) in features:
             matching |= doc_ids
 
+            for i, bs in enumerate(bitslice):
+                carry = bs & doc_ids
+                bs ^= doc_ids
+                doc_ids = carry
+                if not carry:
+                    break
+
+            if carry:
+                bitslice.append(carry)
+
         self.db.execute("release cluster_docs")
 
-        return matching
+        return matching, bitslice
 
     def _calculate_assignments(self, group_features, group_checks):
         """
@@ -1030,56 +1105,121 @@ class Index:
         return similarities
 
 
-def _index_docs(corpus, input_queue, temp_db_path, max_batch_entries):
+def _index_docs(corpus, doc_ids, doc_keys, temp_db_path):
+    """Index all of the given docs into temp_db_path."""
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
     local_db.execute("begin")
     local_db.execute(
-        "create table inverted_index_segment(field, value, doc_ids roaring_bitmap)"
+        """
+        create table inverted_index_segment(
+            field text, 
+            value, 
+            docs_count,
+            doc_ids roaring_bitmap,
+            primary key (field, value)
+        ) without rowid
+        """
     )
 
     # This is {field: {value: doc_ids, value2: doc_ids}}
     batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
-    batch_entries = 0
 
-    def write_batch():
-        for field, values in batch.items():
-            local_db.executemany(
-                "insert into inverted_index_segment values(?, ?, ?)",
-                ((field, value, doc_ids) for value, doc_ids in values.items()),
-            )
-        return 0, collections.defaultdict(lambda: collections.defaultdict(BitMap))
+    docs = corpus.docs(doc_keys=doc_keys)
 
-    # Index documents until we go over max_batch_entries, then flush that
-    # to a local temporary table.
-    for doc_ids, doc_keys in iter(input_queue.get, None):
+    for doc_id, (_, doc) in zip(doc_ids, docs):
+        features = corpus.index(doc)
+        for field, values in features.items():
 
-        docs = corpus.docs(doc_keys=doc_keys)
+            set_values = set(values)
 
-        for doc_id, (_, doc) in zip(doc_ids, docs):
-            features = corpus.index(doc)
-            for field, values in features.items():
+            for value in set_values:
+                batch[field][value].add(doc_id)
 
-                set_values = set(values)
-                batch_entries += len(set_values)
+    for field, values in batch.items():
+        local_db.executemany(
+            "insert into inverted_index_segment values(?, ?, ?, ?)",
+            (
+                (field, value, len(doc_ids), doc_ids)
+                for value, doc_ids in values.items()
+            ),
+        )
 
-                for value in set_values:
-                    batch[field][value].add(doc_id)
-
-            if batch_entries >= max_batch_entries:
-                batch_entries, batch = write_batch()
-
-    else:
-        batch_entries, batch = write_batch()
-
-    # TODO: Merge the components locally first?
-    local_db.execute(
-        "create index field_values on inverted_index_segment(field, value)"
-    )
     local_db.execute("commit")
     local_db.close()
 
-    return temp_db_path
+    return temp_db_path, 0
+
+
+def _merge_indices(target_db_path, level, *to_merge):
+    """Merge the given indices into target_db_path."""
+
+    target_db = db_utilities.connect_sqlite(target_db_path)
+    temp_dbs = [db_utilities.connect_sqlite(db_path) for db_path in to_merge]
+
+    queries = [
+        db.execute("select * from inverted_index_segment order by field, value")
+        for db in temp_dbs
+    ]
+
+    merge_features = heapq.merge(*queries)
+
+    target_db.execute("begin")
+
+    target_db.execute(
+        """
+        create table inverted_index_segment(
+            field text, 
+            value, 
+            docs_count,
+            doc_ids roaring_bitmap,
+            primary key (field, value)
+        ) without rowid
+        """
+    )
+
+    current_field, current_value, current_count, current_docs = next(merge_features)
+
+    for field, value, docs_count, doc_ids in merge_features:
+        if (field, value) == (current_field, current_value):
+            # still aggregating this field...
+            current_count += docs_count
+            current_docs |= doc_ids
+        else:
+            # We've hit something new...
+            # output_queue.put((current_field, current_value, current_docs))
+            target_db.execute(
+                "insert into inverted_index_segment values(?, ?, ?, ?)",
+                [
+                    current_field,
+                    current_value,
+                    current_count,
+                    current_docs,
+                ],
+            )
+            (current_field, current_value) = (field, value)
+            current_count = docs_count
+            current_docs = doc_ids
+    else:
+        target_db.execute(
+            "replace into inverted_index_segment values(?, ?, ?, ?)",
+            [
+                current_field,
+                current_value,
+                current_count,
+                current_docs,
+            ],
+        )
+
+    target_db.execute("commit")
+    target_db.close()
+
+    # Clean up the temporary dbs now they're merged.
+    for path, db in zip(to_merge, temp_dbs):
+        db.close()
+        os.remove(path)
+
+    return target_db_path, level
 
 
 def _pivot_cluster_by_query(args):
@@ -1151,8 +1291,7 @@ def _pivot_cluster_by_query(args):
 
     # Finally compute the similarity of the query with the composite object.
     if results:
-        composite_query = BitMap.union(*[index[r[0]] for r in results])
-        similarity = query.jaccard_index(composite_query)
+        similarity = results[0][-1]
     else:
         similarity = 0
 

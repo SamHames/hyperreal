@@ -3,12 +3,15 @@ Test cases for the index functionality, including integration with some
 concrete corpus objects.
 
 """
+import collections
 import csv
+import heapq
 import pathlib
 import random
 import shutil
 import uuid
 
+from pyroaring import BitMap
 import pytest
 
 import hyperreal
@@ -50,10 +53,7 @@ def test_indexing(tmp_path, corpus, args, kwargs):
 
     # These are actually very bad settings, but necessary for checking
     # all code paths and concurrency.
-    i.index(
-        batch_key_size=10,
-        max_batch_entries=1000,
-    )
+    i.index(doc_batch_size=10)
 
     # Compare against the actual test data.
     with open("tests/data/alice30.txt", "r", encoding="utf-8") as f:
@@ -162,11 +162,26 @@ def test_querying(example_index_corpora_path):
     # Confirm that feature_id -> feature mappings in the model are correct
     # And the cluster queries are in fact boolean combinations.
     for cluster_id in index.cluster_ids:
-        cluster_query = index.cluster_query(cluster_id)
+        cluster_matching, cluster_bs = index.cluster_query(cluster_id)
+
+        # Used for checking the ranking with bstm
+        accumulator = collections.Counter()
 
         for feature_id, field, value, docs_count in index.cluster_features(cluster_id):
             assert index[feature_id] == index[(field, value)]
-            assert (index[feature_id] & cluster_query) == index[feature_id]
+            assert (index[feature_id] & cluster_matching) == index[feature_id]
+            for doc_id in index[feature_id]:
+                accumulator[doc_id] += 1
+
+        # also test the ranking with bstm - we should retrieve the same number
+        # of results by each method.
+        top_k = hyperreal.utilities.bstm(cluster_matching, cluster_bs, 5)
+        n_check = len(top_k)
+        real_top_k = BitMap(
+            heapq.nlargest(n_check, accumulator, key=lambda x: accumulator[x])
+        )
+
+        assert top_k == real_top_k
 
     # Confirm that feature lookup works in both directions
     feature = index.lookup_feature(1)

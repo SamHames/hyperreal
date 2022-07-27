@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl
 from jinja2 import PackageLoader, Environment, select_autoescape
 
 import hyperreal.index
+import hyperreal.utilities
 
 
 templates = Environment(
@@ -137,11 +138,13 @@ class Index:
     feature = FeatureOverview()
 
     @cherrypy.expose
-    def index(self, index_id, feature_id=None, cluster_id=None):
+    def index(self, index_id, feature_id=None, cluster_id=None, top_k="5"):
 
         template = templates.get_template("index.html")
 
         rendered_docs = []
+        highlight_cluster_id = None
+        highlight_feature_id = None
 
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
@@ -149,21 +152,22 @@ class Index:
 
             if cherrypy.request.index.corpus is not None:
                 rendered_docs = cherrypy.request.index.render_docs(
-                    query, random_sample_size=5
+                    query, random_sample_size=int(top_k)
                 )
 
             total_docs = len(query)
+            highlight_feature_id = int(feature_id)
 
         elif cluster_id is not None:
-            query = cherrypy.request.index.cluster_query(int(cluster_id))
+            query, bitslice = cherrypy.request.index.cluster_query(int(cluster_id))
             clusters = cherrypy.request.index.pivot_clusters_by_query(query)
 
             if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.render_docs(
-                    query, random_sample_size=5
-                )
+                ranked = hyperreal.utilities.bstm(query, bitslice, int(top_k))
+                rendered_docs = cherrypy.request.index.render_docs(ranked)
 
             total_docs = len(query)
+            highlight_cluster_id = int(cluster_id)
 
         else:
             clusters = cherrypy.request.index.top_cluster_features()
@@ -177,6 +181,8 @@ class Index:
             # context, and avoid passing this around for everything that
             # needs it?
             index_id=index_id,
+            highlight_feature_id=highlight_feature_id,
+            highlight_cluster_id=highlight_cluster_id,
         )
 
 

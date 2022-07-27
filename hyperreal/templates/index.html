@@ -26,14 +26,16 @@
 <ul class="cluster-list">
 
     {% for cluster_id, features in clusters[:1] %}
-    <li>
+    <li {% if cluster_id == highlight_cluster_id %}class="highlight"{% endif %}>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li>
+            <li {% if feature_id == highlight_feature_id %}class="highlight"{% endif %}>
                 <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
                     <div class="feature">
                         <span class="field">{{ field }}</span>
-                        <span class="value">{{ value }}</span></div>
+                        <span class="value">{{ value }}</span>
+                        <span class="score">{{ ("{0:0.2f}" if score <= 1.0 else "{0:g}").format(score) }}</span>
+                    </div>
                 </a>
             </li>
             {% endfor %}
@@ -60,14 +62,16 @@
     </li>
     {% endif %}
     {% for cluster_id, features in clusters[1:] %}
-    <li>
+    <li {% if cluster_id == highlight_cluster_id %}class="highlight"{% endif %}>
         <ul class="compact-cluster">
             {% for feature_id, field, value, score in features %}
-            <li>
+            <li {% if feature_id == highlight_feature_id %}class="highlight"{% endif %}>
                 <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
                     <div class="feature">
                         <span class="field">{{ field }}</span>
-                        <span class="value">{{ value }}</span></div>
+                        <span class="value">{{ value }}</span>
+                        <span class="score">{{ ("{0:0.2f}" if score <= 1.0 else "{0:g}").format(score) }}</span>
+                    </div>
                 </a>
             </li>
             {% endfor %}
