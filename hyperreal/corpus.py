@@ -448,7 +448,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 select 
                     post.PostType, 
                     post.Body,
-                    coalesce(Post.Title, parent.Title) as QuestionTitle
+                    coalesce(Post.Title, parent.Title) as QuestionTitle,
+                    coalesce(Post.ParentId, Post.Id) as TagPostId
                 from Post 
                 left outer join Post parent 
                     on parent.Id = Post.ParentId
@@ -460,7 +461,9 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         tags = "\n".join(
             f"<li>  { r['Tag'] }"
-            for r in self.db.execute("select Tag from PostTag where PostId = ?", [key])
+            for r in self.db.execute(
+                "select Tag from PostTag where PostId = ?", [base_fields["TagPostId"]]
+            )
         )
 
         user_comments = list(
