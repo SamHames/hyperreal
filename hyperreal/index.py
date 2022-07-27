@@ -124,6 +124,7 @@ class CorpusMissingError(AttributeError):
 FeatureKey = tuple[str, Any]
 FeatureKeyOrId = Union[FeatureKey, int]
 FeatureIdAndKey = tuple[int, str, Any]
+BitSlice = list[BitMap]
 
 
 def requires_corpus(func):
@@ -754,10 +755,19 @@ class Index:
         return cluster_features
 
     def cluster_query(self, cluster_id):
-        """Return the bitset representing docs matching this cluster of features."""
+        """
+        Return matching documents and accumulated bitslice for cluster_id.
+
+        The matching documents are the documents that contain any terms from
+        the cluster. The returned bitslice represents the accumulation of
+        features matching across all features and can be used for ranking
+        with `utilities.bstm`.
+
+        """
 
         self.db.execute("savepoint cluster_docs")
         matching = BitMap()
+        bitslice = [BitMap()]
 
         features = self.db.execute(
             """
@@ -774,9 +784,19 @@ class Index:
         for (doc_ids,) in features:
             matching |= doc_ids
 
+            for i, bs in enumerate(bitslice):
+                carry = bs & doc_ids
+                bs ^= doc_ids
+                doc_ids = carry
+                if not carry:
+                    break
+
+            if carry:
+                bitslice.append(carry)
+
         self.db.execute("release cluster_docs")
 
-        return matching
+        return matching, bitslice
 
     def _calculate_assignments(self, group_features, group_checks):
         """
@@ -1271,8 +1291,7 @@ def _pivot_cluster_by_query(args):
 
     # Finally compute the similarity of the query with the composite object.
     if results:
-        composite_query = BitMap.union(*[index[r[0]] for r in results])
-        similarity = query.jaccard_index(composite_query)
+        similarity = results[0][-1]
     else:
         similarity = 0
 

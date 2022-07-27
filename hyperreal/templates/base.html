@@ -8,15 +8,21 @@
     {% endblock %}
 
     <style type="text/css">
+
 .cluster-list {
     display: inline-block;
     list-style-type: none;
     padding-left: 0;
+    max-width: 40em;
 }
 
 .cluster-list > li {
     margin: 2em 1em;
     box-shadow: 0 0 0.2em 0.1em gray;
+}
+
+.highlight {
+    border: 0.2em solid orange;
 }
 
 .cluster-list li {
@@ -71,6 +77,11 @@ img {
 
 .value {
     padding: 0 0.5em;
+}
+
+.score {
+    color: black;
+    font-size: 60%;
 }
 
     </style>
