@@ -368,6 +368,17 @@ class Index:
         workers = self.pool._max_workers
 
         try:
+            tempdir = tempfile.TemporaryDirectory()
+            current_temp_file_counter = 0
+
+            def get_next_temp_file():
+                nonlocal current_temp_file_counter
+                temp_file_path = os.path.join(
+                    tempdir.name, str(current_temp_file_counter)
+                )
+                current_temp_file_counter += 1
+                return temp_file_path
+
             # We're still inside a transaction here, so processes reading from
             # the index won't see any of these changes until the release at
             # the end.
@@ -377,164 +388,143 @@ class Index:
             # sequentially
             doc_keys = enumerate(self.corpus.keys())
 
-            with tempfile.TemporaryDirectory() as tempdir:
+            batch_doc_ids = []
+            batch_doc_keys = []
+            batch_size = 0
 
-                batch_doc_ids = []
-                batch_doc_keys = []
-                batch_size = 0
-                current_temp_file_counter = 0
-                next_temp_file = os.path.join(tempdir, str(current_temp_file_counter))
-                futures = set()
-                to_merge = collections.defaultdict(list)
+            futures = set()
+            to_merge = collections.defaultdict(list)
 
-                for doc_key in doc_keys:
+            for doc_key in doc_keys:
 
-                    self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                    batch_doc_ids.append(doc_key[0])
-                    batch_doc_keys.append(doc_key[1])
-                    batch_size += 1
+                self.db.execute("insert into doc_key values(?, ?)", doc_key)
+                batch_doc_ids.append(doc_key[0])
+                batch_doc_keys.append(doc_key[1])
+                batch_size += 1
 
-                    if batch_size >= doc_batch_size:
-                        # Dispatch the batch
-                        futures.add(
-                            self.pool.submit(
-                                _index_docs,
-                                self.corpus,
-                                batch_doc_ids,
-                                batch_doc_keys,
-                                next_temp_file,
-                            )
-                        )
-                        batch_doc_ids = []
-                        batch_doc_keys = []
-                        batch_size = 0
-                        current_temp_file_counter += 1
-                        next_temp_file = os.path.join(
-                            tempdir, str(current_temp_file_counter)
-                        )
-
-                        if len(futures) >= workers:
-                            done, futures = cf.wait(
-                                futures, return_when="FIRST_COMPLETED"
-                            )
-
-                            for f in done:
-                                segment_path, level = f.result()
-                                to_merge[level].append(segment_path)
-
-                            print(to_merge)
-                            for level, paths in list(to_merge.items()):
-                                if len(paths) >= merge_batches:
-                                    to_merge[level] = []
-                                    futures.add(
-                                        self.pool.submit(
-                                            _merge_indices,
-                                            next_temp_file,
-                                            level + 1,
-                                            *paths,
-                                        )
-                                    )
-                                    current_temp_file_counter += 1
-                                    next_temp_file = os.path.join(
-                                        tempdir, str(current_temp_file_counter)
-                                    )
-
-                # Dispatch the final batch.
-                if batch_doc_keys:
+                if batch_size >= doc_batch_size:
+                    # Dispatch the batch
                     futures.add(
                         self.pool.submit(
                             _index_docs,
                             self.corpus,
                             batch_doc_ids,
                             batch_doc_keys,
-                            next_temp_file,
+                            get_next_temp_file(),
                         )
                     )
-                    current_temp_file_counter += 1
-                    next_temp_file = os.path.join(
-                        tempdir, str(current_temp_file_counter)
-                    )
+                    batch_doc_ids = []
+                    batch_doc_keys = []
+                    batch_size = 0
 
-                # Finalise all segment indexing
-                while futures:
-                    done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
+                    if len(futures) >= workers:
+                        done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
 
-                    for future in done:
-                        segment_path, level = future.result()
-                        to_merge[level].append(segment_path)
+                        for f in done:
+                            segment_path, level = f.result()
+                            to_merge[level].append(segment_path)
 
-                    for level, paths in list(to_merge.items()):
-                        if len(paths) >= merge_batches:
-                            to_merge[level] = []
-                            futures.add(
-                                self.pool.submit(
-                                    _merge_indices,
-                                    next_temp_file,
-                                    level + 1,
-                                    *paths,
+                        print(to_merge)
+                        for level, paths in list(to_merge.items()):
+                            if len(paths) >= merge_batches:
+                                to_merge[level] = []
+                                futures.add(
+                                    self.pool.submit(
+                                        _merge_indices,
+                                        get_next_temp_file(),
+                                        level + 1,
+                                        *paths,
+                                    )
                                 )
-                            )
-                            current_temp_file_counter += 1
-                            next_temp_file = os.path.join(
-                                tempdir, str(current_temp_file_counter)
-                            )
 
-                final_merge = self.pool.submit(
-                    _merge_indices,
-                    next_temp_file,
-                    level + 1,
-                    *[p for paths in to_merge.values() for p in paths],
+            # Dispatch the final batch.
+            if batch_doc_keys:
+                futures.add(
+                    self.pool.submit(
+                        _index_docs,
+                        self.corpus,
+                        batch_doc_ids,
+                        batch_doc_keys,
+                        get_next_temp_file(),
+                    )
                 )
 
-                final_merge.result()
+            # Finalise all segment indexing
+            while futures:
+                done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
 
-                # Now merge back to the original index, preserving feature_ids
-                # if this is a reindex operation.
-                # Deleted features will be removed
-                self.db.execute("attach ? as merged", [next_temp_file])
-                self.db.execute(
-                    """
-                    delete from inverted_index 
+                for future in done:
+                    segment_path, level = future.result()
+                    to_merge[level].append(segment_path)
+
+                for level, paths in list(to_merge.items()):
+                    if len(paths) >= merge_batches:
+                        to_merge[level] = []
+                        futures.add(
+                            self.pool.submit(
+                                _merge_indices,
+                                get_next_temp_file(),
+                                level + 1,
+                                *paths,
+                            )
+                        )
+
+            final_merge = self.pool.submit(
+                _merge_indices,
+                get_next_temp_file(),
+                1,
+                *[p for paths in to_merge.values() for p in paths],
+            )
+
+            merge_file, level = final_merge.result()
+
+            # Now merge back to the original index, preserving feature_ids
+            # if this is a reindex operation.
+            # Deleted features will be removed
+            self.db.execute("attach ? as merged", [merge_file])
+            to_detach = True
+
+            self.db.execute(
+                """
+                delete from inverted_index 
+                where (field, value) not in (
+                    select field, value 
+                    from merged.inverted_index_segment
+                )
+                """
+            )
+
+            # New features will be inserted
+            self.db.execute(
+                """
+                insert into inverted_index(
+                    field, value, docs_count, doc_ids
+                )
+                    select * 
+                    from merged.inverted_index_segment
                     where (field, value) not in (
                         select field, value 
-                        from merged.inverted_index_segment
+                        from main.inverted_index
                     )
-                    """
-                )
-
-                # New features will be inserted
-                self.db.execute(
-                    """
-                    insert into inverted_index(
-                        field, value, docs_count, doc_ids
-                    )
-                        select * 
+                """
+            )
+            # Existing features will be updated.
+            self.db.execute(
+                """
+                update inverted_index set
+                    (docs_count, doc_ids) = (
+                        select 
+                            docs_count, 
+                            doc_ids
                         from merged.inverted_index_segment
-                        where (field, value) not in (
-                            select field, value 
-                            from main.inverted_index
-                        )
-                    """
-                )
-                # Existing features will be updated.
-                self.db.execute(
-                    """
-                    update inverted_index set
-                        (docs_count, doc_ids) = (
-                            select 
-                                docs_count, 
-                                doc_ids
-                            from merged.inverted_index_segment
-                            where (field, value) = (inverted_index.field, inverted_index.value)
-                        )
-                    where (field, value) in (
-                        select field, value
-                        from merged.inverted_index_segment
+                        where (field, value) = (inverted_index.field, inverted_index.value)
                     )
-                    """
+                where (field, value) in (
+                    select field, value
+                    from merged.inverted_index_segment
                 )
-
-                os.remove(next_temp_file)
+                """
+            )
 
             # Write the field summary
             self.db.execute("delete from field_summary")
@@ -556,10 +546,10 @@ class Index:
             raise
 
         finally:
-            # Make sure to nicely cleanup all of the multiprocessing bits and bobs.
             self.db.execute("release reindex")
-
-        self.db.execute("detach merged")
+            if to_detach:
+                self.db.execute("detach merged")
+            tempdir.cleanup()
 
     def convert_query_to_keys(self, query):
         """Generate the doc_keys one by one for the given query."""
