@@ -1340,7 +1340,7 @@ def measure_features_to_feature_group(
     only_once = cluster_union - covered_twice
 
     c = len(cluster_union)
-    objective = hits / c
+    objective = hits / (c + n_features)
 
     assignments = []
 
@@ -1352,7 +1352,7 @@ def measure_features_to_feature_group(
 
         new_hits = hits + feature_hits
         new_c = docs.union_cardinality(cluster_union)
-        new_objective = new_hits / new_c
+        new_objective = new_hits / (new_c + n_features + 1)
 
         delta = new_objective - objective
 
@@ -1375,7 +1375,7 @@ def measure_features_to_feature_group(
 
         # It's okay for the cluster to become empty - we'll just prune it.
         if old_c:
-            old_objective = old_hits / old_c
+            old_objective = old_hits / (old_c + n_features - 1)
             delta = objective - old_objective
         # If it would otherwise be a singleton cluster, just mark it as no change
         else:
