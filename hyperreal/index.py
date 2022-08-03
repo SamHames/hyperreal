@@ -148,14 +148,14 @@ def requires_corpus(func):
 
 
 class Index:
-    def __init__(self, db_path, corpus=None, pool=None, mp_context=None):
+    def __init__(self, db_path, corpus=None, pool=None):
         """
         The corpus object is optional - if not provided certain operations such
         as retrieving or rendering documents won't be possible.
 
-        A pool and mp_context objects may be provided to control concurrency
-        across different operations. If not provided, they will be initialised
-        to a spawn server.
+        A concurrent.futures pool may be provided to control concurrency
+        across different operations. If not provided, a pool will be initialised
+        using within a `spawn` mpcontext.
 
         Note that the index is structured so that db_path is the only necessary
         state, and can always be reinitialised from just that path.
@@ -164,7 +164,6 @@ class Index:
         self.db_path = db_path
         self.db = db_utilities.connect_sqlite(self.db_path)
 
-        self._mp_context = mp_context
         self._pool = pool
 
         for statement in """
@@ -203,17 +202,10 @@ class Index:
         self.corpus = corpus
 
     @property
-    def mp_context(self):
-        if self._mp_context is None:
-            self._mp_context = mp.get_context("spawn")
-
-        return self._mp_context
-
-    @property
     def pool(self):
         """Lazily initialised multiprocessing pool if none is provided on init."""
         if self._pool is None:
-            self._pool = cf.ProcessPoolExecutor(mp_context=self.mp_context)
+            self._pool = cf.ProcessPoolExecutor(mp_context=mp.get_context("spawn"))
 
         return self._pool
 
