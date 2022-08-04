@@ -21,100 +21,7 @@ from typing import Any, Union, Hashable, Optional
 
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
 
-from hyperreal import db_utilities, corpus
-
-
-# The application ID uses SQLite's pragma application_id to quickly identify index
-# databases from everything else.
-MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 4
-
-SCHEMA = f"""
-create table if not exists doc_key (
-    doc_id integer primary key,
-    doc_key unique
-);
-
-create table if not exists inverted_index (
-    feature_id integer primary key,
-    field text not null,
-    value not null,
-    docs_count integer not null,
-    doc_ids roaring_bitmap not null,
-    unique (field, value)
-);
-
-create table if not exists field_summary (
-    field text primary key,
-    distinct_values integer,
-    min_value,
-    max_value
-);
-
-create index if not exists docs_counts on inverted_index(docs_count);
-
--- The summary table for clusters, including the loose hierarchy
--- and the materialised results of the query and document counts.
-create table if not exists cluster (
-    cluster_id integer primary key,
-    feature_count integer default 0
-);
-
-create table if not exists feature_cluster (
-    feature_id integer primary key references inverted_index(feature_id) on delete cascade,
-    cluster_id integer references cluster(cluster_id) on delete cascade,
-    docs_count integer
-);
-
-create index if not exists cluster_features on feature_cluster(
-    cluster_id,
-    docs_count
-);
-
--- These triggers make sure that the cluster table always demonstrates
--- which clusters are currently active, and allows the creation of tracking
--- metadata for new clusters on insert of the features.
-create trigger if not exists ensure_cluster before insert on feature_cluster
-    begin
-        insert or ignore into cluster(cluster_id) values (new.cluster_id);
-        update cluster set
-            feature_count = feature_count + 1
-        where cluster_id = new.cluster_id;
-    end;
-
-create trigger if not exists delete_feature_cluster after delete on feature_cluster
-    begin
-        update cluster set
-            feature_count = feature_count - 1
-        where cluster_id = old.cluster_id;
-        delete from cluster
-        where cluster_id = old.cluster_id
-            and feature_count = 0;
-    end;
-
-create trigger if not exists ensure_cluster_update before update on feature_cluster
-    when old.cluster_id != new.cluster_id
-    begin
-        insert or ignore into cluster(cluster_id) values (new.cluster_id);
-    end;
-
-create trigger if not exists update_cluster_feature_counts after update on feature_cluster
-    when old.cluster_id != new.cluster_id
-    begin
-        update cluster set
-            feature_count = feature_count + 1
-        where cluster_id = new.cluster_id;
-        update cluster set
-            feature_count = feature_count - 1
-        where cluster_id = old.cluster_id;
-        delete from cluster
-        where cluster_id = old.cluster_id
-            and feature_count = 0;
-    end;
-
-pragma user_version = { CURRENT_SCHEMA_VERSION };
-pragma application_id = { MAGIC_APPLICATION_ID };
-"""
+from hyperreal import db_utilities, corpus, _index_schema
 
 
 class CorpusMissingError(AttributeError):
@@ -175,29 +82,7 @@ class Index:
         ):
             self.db.execute(statement)
 
-        db_version = list(self.db.execute("pragma user_version"))[0][0]
-
-        if db_version == 0:
-            # Check that this is a database with no tables, and error if not - don't
-            # want to create these tables on top of an unrelated database.
-            table_count = list(self.db.execute("select count(*) from sqlite_master"))[
-                0
-            ][0]
-
-            if table_count > 0:
-                raise ValueError(
-                    f"{self.db_path} is not empty, and cannot be used as an index."
-                )
-            else:
-                self.db.executescript(SCHEMA)
-        elif db_version < CURRENT_SCHEMA_VERSION:
-            raise ValueError(
-                "Index database schema version is too old for this version."
-            )
-        elif db_version > CURRENT_SCHEMA_VERSION:
-            raise ValueError(
-                "Index database schema version is too new for this version."
-            )
+        migrated = _index_schema.migrate(self.db)
 
         self.corpus = corpus
 
