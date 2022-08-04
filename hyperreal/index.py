@@ -58,35 +58,58 @@ def requires_corpus(func):
     return wrapper_func
 
 
-def atomic(func):
+def atomic(writes=False):
     """
-    Wrap the decorated interaction with SQLite in a savepoints.
+    Wrap the decorated interaction with SQLite in a transaction or savepoint.
 
     Uses savepoints - if no encloding transaction is present, this will create
     one, if a transaction is in progress, this will be nested as a non durable
     savepoint within that transaction.
 
+    By default, transactions are considered readonly - set this to false to
+    mark when changes happen so that housekeeping functions can run at the
+    end of a transaction.
+
     """
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        self = args[0]
-        try:
-            self.db.execute(f'savepoint "{func.__name__}"')
+    def atomic_wrapper(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            self = args[0]
+            try:
+                self.db.execute(f'savepoint "{func.__name__}"')
+                self._transaction_level += 1
 
-            return func(*args, **kwargs)
+                results = func(*args, **kwargs)
 
-        except Exception:
-            # Rewind to the previous savepoint, then release it
-            # This is necessary to behave nicely whether we are operating
-            # inside a larger transaction or just in autocommit mode.
-            self.db.execute(f'rollback to "{func.__name__}"')
-            raise
+                if writes:
+                    self._changed = True
 
-        finally:
-            self.db.execute(f'release "{func.__name__}"')
+                return results
 
-    return wrapper
+            except Exception:
+                # Rewind to the previous savepoint, then release it
+                # This is necessary to behave nicely whether we are operating
+                # inside a larger transaction or just in autocommit mode.
+                self.db.execute(f'rollback to "{func.__name__}"')
+                raise
+
+            finally:
+                self._transaction_level -= 1
+
+                # We've decremented to the final transaction level and are about
+                # to commit.
+                if self._transaction_level == 0 and self._changed:
+                    # Note that this will check for changed queries, and will
+                    # therefore be a noop if there aren't any.
+                    self._update_changed_clusters()
+                    self._changed = False
+
+                self.db.execute(f'release "{func.__name__}"')
+
+        return wrapper
+
+    return atomic_wrapper
 
 
 class Index:
@@ -121,6 +144,13 @@ class Index:
 
         self.corpus = corpus
 
+        # For tracking the state of nested transactions. This is incremented
+        # everytime a savepoint is entered with the @atomic() decorator, and
+        # decremented on leaving. Housekeeping functions will run when leaving
+        # the last savepoint by committing a transaction.
+        self._transaction_level = 0
+        self._changed = False
+
     @property
     def pool(self):
         """Lazily initialised multiprocessing pool if none is provided on init."""
@@ -135,7 +165,8 @@ class Index:
         try:
             db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             return (
-                list(db.execute("pragma application_id"))[0][0] == MAGIC_APPLICATION_ID
+                list(db.execute("pragma application_id"))[0][0]
+                == _index_schema.MAGIC_APPLICATION_ID
             )
         except sqlite3.OperationalError:
             return False
@@ -143,7 +174,7 @@ class Index:
     def close(self):
         self.db.close()
 
-    @atomic
+    @atomic()
     def __getitem__(self, key: Union[FeatureKey, int, slice]) -> BitMap:
         """key can either be a feature_id integer, a (field, value) tuple, or a slice of (field, value)'s indicating a range."""
 
@@ -403,9 +434,9 @@ class Index:
 
             self.db.execute(
                 """
-                delete from inverted_index 
+                delete from inverted_index
                 where (field, value) not in (
-                    select field, value 
+                    select field, value
                     from merged.inverted_index_segment
                 )
                 """
@@ -417,10 +448,10 @@ class Index:
                 insert into inverted_index(
                     field, value, docs_count, doc_ids
                 )
-                    select * 
+                    select *
                     from merged.inverted_index_segment
                     where (field, value) not in (
-                        select field, value 
+                        select field, value
                         from main.inverted_index
                     )
                 """
@@ -430,8 +461,8 @@ class Index:
                 """
                 update inverted_index set
                     (docs_count, doc_ids) = (
-                        select 
-                            docs_count, 
+                        select
+                            docs_count,
                             doc_ids
                         from merged.inverted_index_segment
                         where (field, value) = (inverted_index.field, inverted_index.value)
@@ -458,6 +489,12 @@ class Index:
                 """
             )
 
+            # Update all cluster stats based on new index stats
+            self.db.execute(
+                "insert into changed_cluster select cluster_id from cluster"
+            )
+            self._update_changed_clusters()
+
             self.db.execute("commit")
             self.db.execute("detach merged")
 
@@ -467,7 +504,7 @@ class Index:
         finally:
             tempdir.cleanup()
 
-    @atomic
+    @atomic()
     def convert_query_to_keys(self, query):
         """Generate the doc_keys one by one for the given query."""
 
@@ -503,7 +540,7 @@ class Index:
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_html(doc_keys)
 
-    @atomic
+    @atomic(writes=True)
     def initialise_clusters(self, n_clusters, min_docs=1):
 
         self.db.execute("delete from feature_cluster")
@@ -521,14 +558,14 @@ class Index:
             (n_clusters, min_docs),
         )
 
-    @atomic
+    @atomic(writes=True)
     def delete_clusters(self, cluster_ids):
         """Delete the specified clusters."""
         self.db.executemany(
             "delete from cluster where cluster_id = ?", [[c] for c in cluster_ids]
         )
 
-    @atomic
+    @atomic(writes=True)
     def merge_clusters(self, cluster_ids):
         """Merge all clusters into the first cluster_id in the provided list."""
 
@@ -542,7 +579,7 @@ class Index:
 
         return merge_cluster_id
 
-    @atomic
+    @atomic(writes=True)
     def delete_features(self, feature_ids):
         """Delete the given features from the model."""
         self.db.executemany(
@@ -550,7 +587,7 @@ class Index:
             [[f] for f in feature_ids],
         )
 
-    @atomic
+    @atomic(writes=True)
     def create_cluster_from_features(self, feature_ids):
         """
         Create a new cluster from the provided set of features.
@@ -562,8 +599,8 @@ class Index:
         next_cluster_id = list(
             self.db.execute(
                 """
-            select 
-                coalesce(max(cluster_id), 0) + 1 
+            select
+                coalesce(max(cluster_id), 0) + 1
             from cluster
             """
             )
@@ -594,7 +631,7 @@ class Index:
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]
 
-    @atomic
+    @atomic()
     def top_cluster_features(self, top_k=20):
         """Return the top_k features according to the number of matching documents."""
 
@@ -611,7 +648,7 @@ class Index:
 
         return clusters
 
-    @atomic
+    @atomic()
     def pivot_clusters_by_query(self, query, cluster_ids=None, top_k=20):
 
         cluster_ids = cluster_ids or self.cluster_ids
@@ -654,7 +691,7 @@ class Index:
 
         return cluster_features
 
-    @atomic
+    @atomic()
     def cluster_query(self, cluster_id):
         """
         Return matching documents and accumulated bitslice for cluster_id.
@@ -671,10 +708,10 @@ class Index:
 
         features = self.db.execute(
             """
-            select doc_ids 
-            from inverted_index 
+            select doc_ids
+            from inverted_index
             where feature_id in (
-                select feature_id 
+                select feature_id
                 from feature_cluster
                 where cluster_id = ?
             )
@@ -916,7 +953,7 @@ class Index:
             split_cluster_features, iterations, sub_iterations, group_test
         )
 
-    @atomic
+    @atomic(writes=True)
     def refine_clusters(
         self,
         iterations: int = 10,
@@ -967,6 +1004,33 @@ class Index:
                 for feature_id in features
             ),
         )
+
+    def _update_changed_clusters(self):
+        """
+        Refresh cluster union queries for changed clusters.
+
+        This is usually called from the `atomic` decorator, or when reindexing.
+
+        It is assumed that this is called inside a transaction.
+
+        """
+
+        bg_args = list(
+            [self.db_path, row[0]]
+            for row in self.db.execute("select cluster_id from changed_cluster")
+        )
+
+        for cluster_id, query, weight in self.pool.map(_cluster_union, bg_args):
+
+            self.db.execute(
+                """
+                update cluster set (docs_count, weight, doc_ids) = (?, ?, ?)
+                where cluster_id = ?
+                """,
+                (len(query), weight, query, cluster_id),
+            )
+
+        self.db.execute("delete from changed_cluster")
 
 
 def _index_docs(corpus, doc_ids, doc_keys, temp_db_path):
@@ -1163,11 +1227,14 @@ def _pivot_cluster_by_query(args):
         ((*r[1:], r[0]) for r in results if r[1] >= 0), reverse=True, key=lambda r: r[3]
     )
 
-    # Finally compute the similarity of the query with the composite object.
-    if results:
-        similarity = results[0][-1]
-    else:
-        similarity = 0
+    # Finally compute the similarity of the query with the cluster_union.
+    cluster_union = list(
+        index.db.execute(
+            "select doc_ids from cluster where cluster_id = ?", [cluster_id]
+        )
+    )[0][0]
+
+    similarity = query.jaccard_index(cluster_union)
 
     index.close()
 
@@ -1186,89 +1253,121 @@ def measure_features_to_feature_group(
 
     """
 
-    index = Index(index_db_path)
+    try:
+        index = Index(index_db_path)
 
-    if not feature_group:
-        return None
+        if not feature_group:
+            return None
 
-    n_features = len(feature_group)
+        n_features = len(feature_group)
 
-    return_size = len(comparison_features)
-    return_features = []
-    # Note that we're using arrays here just to minimise the number of objects
-    # we're returning and serialising here.
-    result_delta = array.array("d", (0 for _ in range(return_size)))
-    array_index = 0
+        return_size = len(comparison_features)
+        return_features = []
+        # Note that we're using arrays here just to minimise the number of objects
+        # we're returning and serialising here.
+        result_delta = array.array("d", (0 for _ in range(return_size)))
+        array_index = 0
 
-    # The union of all docs covered by the cluster
-    cluster_union = BitMap()
-    # The set of all docs covered at least twice.
-    # This will be used to work out which documents are only covered once.
-    covered_twice = BitMap()
+        # The union of all docs covered by the cluster
+        cluster_union = BitMap()
+        # The set of all docs covered at least twice.
+        # This will be used to work out which documents are only covered once.
+        covered_twice = BitMap()
 
-    hits = 0
+        hits = 0
 
-    # Construct the union of all cluster tokens, and also the set of
-    # documents only covered by a single feature.
-    for feature in feature_group:
+        # Construct the union of all cluster tokens, and also the set of
+        # documents only covered by a single feature.
+        for feature in feature_group:
 
-        docs = index[feature]
+            docs = index[feature]
 
-        hits += len(docs)
+            hits += len(docs)
 
-        # Docs covered at least twice
-        covered_twice |= cluster_union & docs
-        # All docs now covered
-        cluster_union |= docs
+            # Docs covered at least twice
+            covered_twice |= cluster_union & docs
+            # All docs now covered
+            cluster_union |= docs
 
-    only_once = cluster_union - covered_twice
+        only_once = cluster_union - covered_twice
 
-    c = len(cluster_union)
-    objective = hits / (c + n_features)
+        c = len(cluster_union)
+        objective = hits / (c + n_features)
 
-    assignments = []
+        assignments = []
 
-    # All tokens that are adds (not already in the cluster)
-    for feature in sorted(comparison_features - feature_group):
-        docs = index[feature]
+        # All tokens that are adds (not already in the cluster)
+        for feature in sorted(comparison_features - feature_group):
+            docs = index[feature]
 
-        feature_hits = len(docs)
+            feature_hits = len(docs)
 
-        new_hits = hits + feature_hits
-        new_c = docs.union_cardinality(cluster_union)
-        new_objective = new_hits / (new_c + n_features + 1)
+            new_hits = hits + feature_hits
+            new_c = docs.union_cardinality(cluster_union)
+            new_objective = new_hits / (new_c + n_features + 1)
 
-        delta = new_objective - objective
+            delta = new_objective - objective
 
-        return_features.append(feature)
-        result_delta[array_index] = delta
-        array_index += 1
+            return_features.append(feature)
+            result_delta[array_index] = delta
+            array_index += 1
 
-    already_in = array_index
+        already_in = array_index
 
-    # Features that are already in the cluster, so we need to calculate a remove operator.
-    # Effectively we're counting the negative of the score for removing that feature
-    # as the effect of adding it to the cluster.
-    for feature in sorted(feature_group & comparison_features):
-        docs = index[feature]
+        # Features that are already in the cluster, so we need to calculate a remove operator.
+        # Effectively we're counting the negative of the score for removing that feature
+        # as the effect of adding it to the cluster.
+        for feature in sorted(feature_group & comparison_features):
+            docs = index[feature]
 
-        feature_hits = len(docs)
+            feature_hits = len(docs)
 
-        old_hits = hits - feature_hits
-        old_c = c - docs.intersection_cardinality(only_once)
+            old_hits = hits - feature_hits
+            old_c = c - docs.intersection_cardinality(only_once)
 
-        # It's okay for the cluster to become empty - we'll just prune it.
-        if old_c:
-            old_objective = old_hits / (old_c + n_features - 1)
-            delta = objective - old_objective
-        # If it would otherwise be a singleton cluster, just mark it as no change
-        else:
-            delta = 0
+            # It's okay for the cluster to become empty - we'll just prune it.
+            if old_c:
+                old_objective = old_hits / (old_c + n_features - 1)
+                delta = objective - old_objective
+            # If it would otherwise be a singleton cluster, just mark it as no change
+            else:
+                delta = 0
 
-        return_features.append(feature)
-        result_delta[array_index] = delta
-        array_index += 1
+            return_features.append(feature)
+            result_delta[array_index] = delta
+            array_index += 1
 
-    index.close()
+    finally:
+        index.close()
 
     return group_key, return_features, result_delta, already_in, objective
+
+
+def _cluster_union(args):
+
+    index_db_path, cluster_id = args
+
+    try:
+        index = Index(index_db_path)
+        query = BitMap()
+        weight = 0
+
+        for docs_count, doc_ids in index.db.execute(
+            """
+            select docs_count, doc_ids
+            from inverted_index
+            where feature_id in (
+                select feature_id
+                from feature_cluster
+                where cluster_id = ?
+            )
+            """,
+            [cluster_id],
+        ):
+            query |= doc_ids
+            weight += docs_count
+
+    finally:
+        index.close()
+
+    return cluster_id, query, weight

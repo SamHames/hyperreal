@@ -100,7 +100,6 @@ def plaintext_corpus_serve(corpus_db, index_db):
             corpus_class=hyperreal.corpus.PlainTextSqliteCorpus,
             corpus_args=[corpus_db],
             pool=pool,
-            mp_context=mp_context,
         )
         hyperreal.server.launch_web_server(index_server)
 
@@ -180,7 +179,6 @@ def stackexchange_corpus_serve(corpus_db, index_db):
             corpus_class=hyperreal.corpus.StackExchangeCorpus,
             corpus_args=[corpus_db],
             pool=pool,
-            mp_context=mp_context,
         )
         hyperreal.server.launch_web_server(index_server)
 
@@ -236,7 +234,5 @@ def serve(index_db):
 
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
-        index_server = hyperreal.server.SingleIndexServer(
-            index_db, pool=pool, mp_context=mp_context
-        )
+        index_server = hyperreal.server.SingleIndexServer(index_db, pool=pool)
         hyperreal.server.launch_web_server(index_server)

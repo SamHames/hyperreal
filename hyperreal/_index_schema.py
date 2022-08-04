@@ -51,7 +51,10 @@ CURRENT_SCHEMA = f"""
     create table if not exists cluster (
         cluster_id integer primary key,
         feature_count integer default 0,
+        -- Length of doc_ids/number of docs retrieved by the union
         docs_count integer default 0,
+        -- Sum of the length of the individual feature queries that form the union
+        weight integer default 0,
         doc_ids roaring_bitmap
     );
 
@@ -71,14 +74,14 @@ CURRENT_SCHEMA = f"""
     --------
     -- Used to track when clusters have changed, to mark that housekeeping
     -- functions need to run.
-    create table if not exists cluster_changed (
+    create table if not exists changed_cluster (
         cluster_id integer primary key references cluster on delete cascade
     );
 
     --------
     create trigger if not exists mark_cluster_changed after update of feature_count on cluster
         begin
-            insert or ignore into cluster_changed values(new.cluster_id);
+            insert or ignore into changed_cluster values(new.cluster_id);
         end;
 
     --------
@@ -136,10 +139,11 @@ migrations = {
     4: (
         [
             "alter table cluster add column docs_count integer default 0",
+            "alter table cluster add column weight integer default 0",
             "alter table cluster add column doc_ids roaring_bitmap",
         ],
         [
-            "insert into cluster_changed select cluster_id from cluster",
+            "insert into changed_cluster select cluster_id from cluster",
         ],
     )
 }
