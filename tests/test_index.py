@@ -76,9 +76,10 @@ def test_model_creation(example_index_path, n_clusters):
     index = hyperreal.index.Index(example_index_path)
 
     index.initialise_clusters(n_clusters)
-    index.refine_clusters(iterations=1)
+    index.refine_clusters(iterations=3)
 
-    assert len(index.cluster_ids) == n_clusters == len(index.top_cluster_features())
+    assert len(index.cluster_ids) == len(index.top_cluster_features())
+    assert 1 < len(index.cluster_ids) <= n_clusters
 
 
 def test_model_editing(example_index_path):
@@ -225,18 +226,6 @@ def test_pivoting(example_index_path):
                 break
         else:
             assert False
-
-
-def test_within_cluster_associations(example_index_path):
-    index = hyperreal.index.Index(example_index_path)
-
-    index.initialise_clusters(64, min_docs=3)
-    index.refine_clusters(iterations=3)
-    similarities = index.measure_within_clusters_feature_similarity(min_similarity=0.1)
-
-    for cluster in similarities.values():
-        for sim, f1, f2 in cluster:
-            assert index[f1[0]].jaccard_index(index[f2[0]]) >= 0.1
 
 
 def test_create_new_features(example_index_corpora_path):

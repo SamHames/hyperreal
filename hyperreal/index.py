@@ -28,6 +28,10 @@ class CorpusMissingError(AttributeError):
     pass
 
 
+class IndexingError(AttributeError):
+    pass
+
+
 FeatureKey = tuple[str, Any]
 FeatureKeyOrId = Union[FeatureKey, int]
 FeatureIdAndKey = tuple[int, str, Any]
@@ -52,6 +56,37 @@ def requires_corpus(func):
         return func(self, *args, **kwargs)
 
     return wrapper_func
+
+
+def atomic(func):
+    """
+    Wrap the decorated interaction with SQLite in a savepoints.
+
+    Uses savepoints - if no encloding transaction is present, this will create
+    one, if a transaction is in progress, this will be nested as a non durable
+    savepoint within that transaction.
+
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        self = args[0]
+        try:
+            self.db.execute(f'savepoint "{func.__name__}"')
+
+            return func(*args, **kwargs)
+
+        except Exception:
+            # Rewind to the previous savepoint, then release it
+            # This is necessary to behave nicely whether we are operating
+            # inside a larger transaction or just in autocommit mode.
+            self.db.execute(f'rollback to "{func.__name__}"')
+            raise
+
+        finally:
+            self.db.execute(f'release "{func.__name__}"')
+
+    return wrapper
 
 
 class Index:
@@ -108,6 +143,7 @@ class Index:
     def close(self):
         self.db.close()
 
+    @atomic
     def __getitem__(self, key: Union[FeatureKey, int, slice]) -> BitMap:
         """key can either be a feature_id integer, a (field, value) tuple, or a slice of (field, value)'s indicating a range."""
 
@@ -134,7 +170,6 @@ class Index:
                 return BitMap()
 
         elif isinstance(key, slice):
-            self.db.execute("savepoint load_slice")
             if key.step is not None and key.step != 1:
                 raise ValueError("Only stepsize of 1 is supported for slicing.")
             if key.start is None or key.stop is None:
@@ -157,7 +192,6 @@ class Index:
             for (q,) in matching:
                 results |= q
 
-            self.db.execute("release load_slice")
             return results
 
     def __setitem__(self, key: tuple[str, Any], doc_ids: AbstractBitMap) -> None:
@@ -170,7 +204,6 @@ class Index:
         - Features added in this way are not currently preserved on reindexing.
 
         """
-        self.db.execute("savepoint setitem")
 
         try:
             self.db.execute(
@@ -178,13 +211,7 @@ class Index:
                 [*key, len(doc_ids), doc_ids],
             )
         except sqlite3.IntegrityError:
-            self.db.execute("rollback to setitem")
             raise KeyError(f"Feature {key} already exists.")
-        except Exception:
-            self.db.execute("rollback to setitem")
-            raise
-        finally:
-            self.db.execute("release setitem")
 
     def lookup_feature(self, feature_id: int) -> tuple[str, Any]:
         """Lookup the (field, value) for this feature by feature_id."""
@@ -219,10 +246,9 @@ class Index:
     @requires_corpus
     def index(
         self,
-        raise_on_missing=True,
         doc_batch_size=100000,
         merge_batches=10,
-        n_cpus=None,
+        working_dir=None,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -230,22 +256,36 @@ class Index:
         This method will index the entire corpus from scratch. If the corpus has
         already been indexed, it will be atomically replaced.
 
+        By default, a temporary directory will be created to store temporary
+        files which will be cleaned up at the end of the process. If
+        `working_dir` is provided, temporary files will be stored there and
+        cleaned up as processing continues, but the directory itself won't be
+        cleaned up at the end of the process.
+
         Implementation notes:
 
         - aims to only load and process small batches in parallel in the worker
-          threads
-        - provide back pressure, to prevent too much state being held in main
-          memory at the same time.
-        - a new database is created in the background, and overwrites the original
-          database file only at the end of the process.
+          threads: documents will be streamed through so that memory is used
+          only for storing the incremental index results
+        - limits the number of batches in flight at the same time
+        - incrementally merges background batches to a single file
+        - new index content is created in the background, and indexed content is
+          written to the index in the background.
 
         """
-        self.db.execute("savepoint reindex")
 
         workers = self.pool._max_workers
 
         try:
-            tempdir = tempfile.TemporaryDirectory()
+            self.db.execute("begin")
+        except sqlite3.OperationalError:
+            raise IndexingError(
+                "The `index` method can't be called in a nested transaction."
+            )
+
+        try:
+
+            tempdir = working_dir or tempfile.TemporaryDirectory()
             current_temp_file_counter = 0
 
             def get_next_temp_file():
@@ -418,19 +458,18 @@ class Index:
                 """
             )
 
+            self.db.execute("commit")
+            self.db.execute("detach merged")
+
         except Exception:
-            self.db.execute("rollback to reindex")
-            raise
+            self.db.execute("rollback")
 
         finally:
-            self.db.execute("release reindex")
-            if to_detach:
-                self.db.execute("detach merged")
             tempdir.cleanup()
 
+    @atomic
     def convert_query_to_keys(self, query):
         """Generate the doc_keys one by one for the given query."""
-        self.db.execute("savepoint get_doc_keys")
 
         for doc_id in query:
             doc_key = list(
@@ -439,8 +478,6 @@ class Index:
                 )
             )[0][0]
             yield doc_key
-
-        self.db.execute("release get_doc_keys")
 
     @requires_corpus
     def docs(self, query):
@@ -466,9 +503,8 @@ class Index:
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_html(doc_keys)
 
+    @atomic
     def initialise_clusters(self, n_clusters, min_docs=1):
-
-        self.db.execute("savepoint initialise")
 
         self.db.execute("delete from feature_cluster")
         self.db.execute("delete from cluster")
@@ -485,20 +521,16 @@ class Index:
             (n_clusters, min_docs),
         )
 
-        self.db.execute("release initialise")
-
+    @atomic
     def delete_clusters(self, cluster_ids):
         """Delete the specified clusters."""
-        self.db.execute("savepoint delete_clusters")
         self.db.executemany(
             "delete from cluster where cluster_id = ?", [[c] for c in cluster_ids]
         )
 
-        self.db.execute("release delete_clusters")
-
+    @atomic
     def merge_clusters(self, cluster_ids):
         """Merge all clusters into the first cluster_id in the provided list."""
-        self.db.execute("savepoint merge_clusters")
 
         merge_cluster_id = cluster_ids[0]
 
@@ -508,29 +540,24 @@ class Index:
                 [merge_cluster_id, cluster_id],
             )
 
-        self.db.execute("release merge_clusters")
-
         return merge_cluster_id
 
+    @atomic
     def delete_features(self, feature_ids):
         """Delete the given features from the model."""
-        self.db.execute("savepoint delete_clusters")
-
         self.db.executemany(
             "delete from feature_cluster where feature_id=?",
             [[f] for f in feature_ids],
         )
 
-        self.db.execute("release delete_clusters")
-
+    @atomic
     def create_cluster_from_features(self, feature_ids):
         """
         Create a new cluster from the provided set of features.
 
-        LIMITATION: The feature must already exist in the model.
+        The features must exist in the index.
 
         """
-        self.db.execute("savepoint create_clusters")
 
         next_cluster_id = list(
             self.db.execute(
@@ -543,11 +570,23 @@ class Index:
         )[0][0]
 
         self.db.executemany(
+            """
+            insert or ignore into feature_cluster(feature_id, cluster_id, docs_count)
+                values (
+                    ?1,
+                    ?2,
+                    (
+                        select docs_count from inverted_index where feature_id = ?1
+                    )
+                )
+            """,
+            [(f, next_cluster_id) for f in feature_ids],
+        )
+
+        self.db.executemany(
             "update feature_cluster set cluster_id = ? where feature_id = ?",
             [(next_cluster_id, f) for f in feature_ids],
         )
-
-        self.db.execute("release create_clusters")
 
         return next_cluster_id
 
@@ -555,10 +594,9 @@ class Index:
     def cluster_ids(self):
         return [r[0] for r in self.db.execute("select cluster_id from cluster")]
 
+    @atomic
     def top_cluster_features(self, top_k=20):
         """Return the top_k features according to the number of matching documents."""
-
-        self.db.execute("savepoint top_cluster_features")
 
         features = [
             (cluster_id, self.cluster_features(cluster_id, limit=top_k))
@@ -571,13 +609,10 @@ class Index:
             key=lambda r: r[1][0][-1],
         )
 
-        self.db.execute("release top_cluster_features")
-
         return clusters
 
+    @atomic
     def pivot_clusters_by_query(self, query, cluster_ids=None, top_k=20):
-
-        self.db.execute("savepoint pivot_clusters_by_query")
 
         cluster_ids = cluster_ids or self.cluster_ids
         work = [(self.db_path, query, cluster_id, top_k) for cluster_id in cluster_ids]
@@ -593,8 +628,6 @@ class Index:
                 key=lambda r: r[0],
             )
         ]
-
-        self.db.execute("release pivot_clusters_by_query")
 
         return clusters
 
@@ -621,6 +654,7 @@ class Index:
 
         return cluster_features
 
+    @atomic
     def cluster_query(self, cluster_id):
         """
         Return matching documents and accumulated bitslice for cluster_id.
@@ -632,7 +666,6 @@ class Index:
 
         """
 
-        self.db.execute("savepoint cluster_docs")
         matching = BitMap()
         bitslice = [BitMap()]
 
@@ -660,8 +693,6 @@ class Index:
 
             if carry:
                 bitslice.append(carry)
-
-        self.db.execute("release cluster_docs")
 
         return matching, bitslice
 
@@ -885,6 +916,7 @@ class Index:
             split_cluster_features, iterations, sub_iterations, group_test
         )
 
+    @atomic
     def refine_clusters(
         self,
         iterations: int = 10,
@@ -903,8 +935,6 @@ class Index:
             raise ValueError(
                 f"You must specificy at least one subiteration, provided '{sub_iterations}'."
             )
-
-        self.db.execute("savepoint refine")
 
         # Establish forward reverse mappings of features to clusters and vice versa.
         cluster_feature = collections.defaultdict(set)
@@ -938,82 +968,53 @@ class Index:
             ),
         )
 
-        self.db.execute("release refine")
-
-    def measure_within_clusters_feature_similarity(
-        self, cluster_ids=None, min_similarity=0.1
-    ):
-        """
-        Compute all pairwise jaccard similarities within each cluster.
-
-        Returns sorted lists of all feature similarities above the threshold within each cluster.
-
-        """
-
-        futures: set[cf.Future] = set()
-
-        for cluster_id in cluster_ids or self.cluster_ids:
-
-            futures.add(
-                self.pool.submit(
-                    _measure_within_cluster_feature_similarity,
-                    self.db_path,
-                    cluster_id,
-                    min_similarity,
-                )
-            )
-
-        similarities = {}
-
-        for future in cf.as_completed(futures):
-            cluster_id, cluster_similarities = future.result()
-            similarities[cluster_id] = cluster_similarities
-
-        return similarities
-
 
 def _index_docs(corpus, doc_ids, doc_keys, temp_db_path):
     """Index all of the given docs into temp_db_path."""
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
-    local_db.execute("begin")
-    local_db.execute(
-        """
-        create table inverted_index_segment(
-            field text, 
-            value, 
-            docs_count,
-            doc_ids roaring_bitmap,
-            primary key (field, value)
-        ) without rowid
-        """
-    )
 
-    # This is {field: {value: doc_ids, value2: doc_ids}}
-    batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
-
-    docs = corpus.docs(doc_keys=doc_keys)
-
-    for doc_id, (_, doc) in zip(doc_ids, docs):
-        features = corpus.index(doc)
-        for field, values in features.items():
-
-            set_values = set(values)
-
-            for value in set_values:
-                batch[field][value].add(doc_id)
-
-    for field, values in batch.items():
-        local_db.executemany(
-            "insert into inverted_index_segment values(?, ?, ?, ?)",
-            (
-                (field, value, len(doc_ids), doc_ids)
-                for value, doc_ids in values.items()
-            ),
+    try:
+        local_db.execute("begin")
+        local_db.execute(
+            """
+            create table inverted_index_segment(
+                field text,
+                value,
+                docs_count,
+                doc_ids roaring_bitmap,
+                primary key (field, value)
+            ) without rowid
+            """
         )
 
-    local_db.execute("commit")
-    local_db.close()
+        # This is {field: {value: doc_ids, value2: doc_ids}}
+        batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
+
+        docs = corpus.docs(doc_keys=doc_keys)
+
+        for doc_id, (_, doc) in zip(doc_ids, docs):
+            features = corpus.index(doc)
+            for field, values in features.items():
+
+                set_values = set(values)
+
+                for value in set_values:
+                    batch[field][value].add(doc_id)
+
+        for field, values in batch.items():
+            local_db.executemany(
+                "insert into inverted_index_segment values(?, ?, ?, ?)",
+                (
+                    (field, value, len(doc_ids), doc_ids)
+                    for value, doc_ids in values.items()
+                ),
+            )
+
+        local_db.execute("commit")
+
+    finally:
+        local_db.close()
 
     return temp_db_path, 0
 
@@ -1024,39 +1025,54 @@ def _merge_indices(target_db_path, level, *to_merge):
     target_db = db_utilities.connect_sqlite(target_db_path)
     temp_dbs = [db_utilities.connect_sqlite(db_path) for db_path in to_merge]
 
-    queries = [
-        db.execute("select * from inverted_index_segment order by field, value")
-        for db in temp_dbs
-    ]
+    try:
 
-    merge_features = heapq.merge(*queries)
+        queries = [
+            db.execute("select * from inverted_index_segment order by field, value")
+            for db in temp_dbs
+        ]
 
-    target_db.execute("begin")
+        merge_features = heapq.merge(*queries)
 
-    target_db.execute(
-        """
-        create table inverted_index_segment(
-            field text, 
-            value, 
-            docs_count,
-            doc_ids roaring_bitmap,
-            primary key (field, value)
-        ) without rowid
-        """
-    )
+        target_db.execute("begin")
 
-    current_field, current_value, current_count, current_docs = next(merge_features)
+        target_db.execute(
+            """
+            create table inverted_index_segment(
+                field text,
+                value,
+                docs_count,
+                doc_ids roaring_bitmap,
+                primary key (field, value)
+            ) without rowid
+            """
+        )
 
-    for field, value, docs_count, doc_ids in merge_features:
-        if (field, value) == (current_field, current_value):
-            # still aggregating this field...
-            current_count += docs_count
-            current_docs |= doc_ids
+        current_field, current_value, current_count, current_docs = next(merge_features)
+
+        for field, value, docs_count, doc_ids in merge_features:
+            if (field, value) == (current_field, current_value):
+                # still aggregating this field...
+                current_count += docs_count
+                current_docs |= doc_ids
+            else:
+                # We've hit something new...
+                # output_queue.put((current_field, current_value, current_docs))
+                target_db.execute(
+                    "insert into inverted_index_segment values(?, ?, ?, ?)",
+                    [
+                        current_field,
+                        current_value,
+                        current_count,
+                        current_docs,
+                    ],
+                )
+                (current_field, current_value) = (field, value)
+                current_count = docs_count
+                current_docs = doc_ids
         else:
-            # We've hit something new...
-            # output_queue.put((current_field, current_value, current_docs))
             target_db.execute(
-                "insert into inverted_index_segment values(?, ?, ?, ?)",
+                "replace into inverted_index_segment values(?, ?, ?, ?)",
                 [
                     current_field,
                     current_value,
@@ -1064,26 +1080,17 @@ def _merge_indices(target_db_path, level, *to_merge):
                     current_docs,
                 ],
             )
-            (current_field, current_value) = (field, value)
-            current_count = docs_count
-            current_docs = doc_ids
-    else:
-        target_db.execute(
-            "replace into inverted_index_segment values(?, ?, ?, ?)",
-            [
-                current_field,
-                current_value,
-                current_count,
-                current_docs,
-            ],
-        )
 
-    target_db.execute("commit")
-    target_db.close()
+        target_db.execute("commit")
+
+    finally:
+        target_db.close()
+
+        for db in temp_dbs:
+            db.close()
 
     # Clean up the temporary dbs now they're merged.
-    for path, db in zip(to_merge, temp_dbs):
-        db.close()
+    for path in to_merge:
         os.remove(path)
 
     return target_db_path, level
@@ -1265,71 +1272,3 @@ def measure_features_to_feature_group(
     index.close()
 
     return group_key, return_features, result_delta, already_in, objective
-
-
-def _measure_within_cluster_feature_similarity(
-    index_db_path, cluster_id: int, min_similarity: float
-) -> tuple[int, list[tuple[float, FeatureIdAndKey, FeatureIdAndKey]]]:
-    """Return all within cluster jaccard similarities between features above min_similarity."""
-
-    index = Index(index_db_path)
-
-    similarities = []
-
-    index.db.execute("savepoint within_cluster")
-
-    search_order = index.db.execute(
-        """
-        select
-            feature_cluster.feature_id,
-            inverted_index.field,
-            inverted_index.value,
-            feature_cluster.docs_count,
-            doc_ids
-        from feature_cluster
-        inner join inverted_index using(feature_id)
-        where cluster_id = ?
-        -- Break ties with feature_id to avoid duplicate work
-        order by feature_cluster.docs_count, feature_cluster.feature_id
-        """,
-        [cluster_id],
-    )
-
-    for feature_id, field, value, docs_count, doc_ids in search_order:
-
-        max_count = docs_count / min_similarity
-
-        comparison_order = index.db.execute(
-            """
-            select
-                feature_cluster.feature_id,
-                inverted_index.field,
-                inverted_index.value,
-                doc_ids
-            from feature_cluster
-            inner join inverted_index using(feature_id)
-            where cluster_id = ?1
-                and (feature_cluster.docs_count, feature_id) >= (?2, ?4)
-                and feature_cluster.docs_count <= ?3
-                and feature_id != ?4
-            """,
-            [cluster_id, docs_count, max_count, feature_id],
-        )
-
-        for comp_feature, comp_field, comp_value, comp_doc_ids in comparison_order:
-
-            sim = doc_ids.jaccard_index(comp_doc_ids)
-
-            if sim >= min_similarity:
-                heapq.heappush(
-                    similarities,
-                    (
-                        sim,
-                        (feature_id, field, value),
-                        (comp_feature, comp_field, comp_value),
-                    ),
-                )
-
-    index.db.execute("release within_cluster")
-
-    return cluster_id, sorted(similarities, reverse=True)
