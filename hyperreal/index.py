@@ -142,6 +142,11 @@ class Index:
 
         migrated = _index_schema.migrate(self.db)
 
+        if migrated:
+            self.db.execute("begin")
+            self._update_changed_clusters()
+            self.db.execute("commit")
+
         self.corpus = corpus
 
         # For tracking the state of nested transactions. This is incremented
@@ -543,7 +548,8 @@ class Index:
     @atomic(writes=True)
     def initialise_clusters(self, n_clusters, min_docs=1):
 
-        self.db.execute("delete from feature_cluster")
+        # Note - foreign key constraints handle all of the associated
+        # metadata.
         self.db.execute("delete from cluster")
         self.db.execute(
             """
@@ -703,35 +709,11 @@ class Index:
 
         """
 
-        matching = BitMap()
-        bitslice = [BitMap()]
+        feature_ids = [r[0] for r in self.cluster_features(cluster_id)]
 
-        features = self.db.execute(
-            """
-            select doc_ids
-            from inverted_index
-            where feature_id in (
-                select feature_id
-                from feature_cluster
-                where cluster_id = ?
-            )
-            """,
-            [cluster_id],
-        )
-        for (doc_ids,) in features:
-            matching |= doc_ids
+        future = self.pool.submit(_union_bitslice, [self.db_path, None, feature_ids])
 
-            for i, bs in enumerate(bitslice):
-                carry = bs & doc_ids
-                bs ^= doc_ids
-                doc_ids = carry
-                if not carry:
-                    break
-
-            if carry:
-                bitslice.append(carry)
-
-        return matching, bitslice
+        return future.result()[1:]
 
     def _calculate_assignments(self, group_features, group_checks):
         """
@@ -1015,12 +997,29 @@ class Index:
 
         """
 
-        bg_args = list(
-            [self.db_path, row[0]]
-            for row in self.db.execute("select cluster_id from changed_cluster")
+        changed = self.db.execute("select cluster_id from changed_cluster")
+        bg_args = (
+            (
+                self.db_path,
+                cluster_param[0],
+                [
+                    row[0]
+                    for row in self.db.execute(
+                        """
+                        select feature_id
+                        from feature_cluster
+                        where cluster_id = ?
+                        """,
+                        cluster_param,
+                    )
+                ],
+            )
+            for cluster_param in changed
         )
 
-        for cluster_id, query, weight in self.pool.map(_cluster_union, bg_args):
+        # Note that the data here may not have been committed yet, so we have
+        # to read and pass the feature_ids to the background ourselves.
+        for cluster_id, query, weight in self.pool.map(_union_query, bg_args):
 
             self.db.execute(
                 """
@@ -1343,31 +1342,51 @@ def measure_features_to_feature_group(
     return group_key, return_features, result_delta, already_in, objective
 
 
-def _cluster_union(args):
+def _union_query(args):
 
-    index_db_path, cluster_id = args
+    index_db_path, query_key, feature_ids = args
 
     try:
         index = Index(index_db_path)
         query = BitMap()
         weight = 0
 
-        for docs_count, doc_ids in index.db.execute(
-            """
-            select docs_count, doc_ids
-            from inverted_index
-            where feature_id in (
-                select feature_id
-                from feature_cluster
-                where cluster_id = ?
-            )
-            """,
-            [cluster_id],
-        ):
-            query |= doc_ids
-            weight += docs_count
+        for feature_id in feature_ids:
+            docs = index[feature_id]
+            query |= docs
+            weight += len(docs)
 
     finally:
         index.close()
 
-    return cluster_id, query, weight
+    return query_key, query, weight
+
+
+def _union_bitslice(args):
+
+    index_db_path, query_key, feature_ids = args
+
+    try:
+        index = Index(index_db_path)
+        matching = BitMap()
+        bitslice = [BitMap()]
+
+        for feature_id in feature_ids:
+            doc_ids = index[feature_id]
+
+            matching |= doc_ids
+
+            for i, bs in enumerate(bitslice):
+                carry = bs & doc_ids
+                bs ^= doc_ids
+                doc_ids = carry
+                if not carry:
+                    break
+
+            if carry:
+                bitslice.append(carry)
+
+    finally:
+        index.close()
+
+    return query_key, matching, bitslice
