@@ -217,7 +217,6 @@ class SingleIndexServer:
         corpus_args=None,
         corpus_kwargs=None,
         pool=None,
-        mp_context=None,
     ):
         """
         Helper class for serving a single index via the webserver.
@@ -233,7 +232,6 @@ class SingleIndexServer:
         self.corpus_kwargs = corpus_kwargs
         self.index_path = index_path
 
-        self.mp_context = mp_context
         self.pool = pool
 
     def index(self, index_id):
@@ -247,9 +245,7 @@ class SingleIndexServer:
         else:
             corpus = None
 
-        return hyperreal.index.Index(
-            self.index_path, corpus=corpus, pool=self.pool, mp_context=self.mp_context
-        )
+        return hyperreal.index.Index(self.index_path, corpus=corpus, pool=self.pool)
 
     def list_indices(self):
         return {
