@@ -109,27 +109,33 @@ def stackexchange_corpus():
     pass
 
 
-@stackexchange_corpus.command(name="create")
+@stackexchange_corpus.command(name="add-site")
 @click.argument("posts_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("comments_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("users_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("site_url", type=str)
 @click.argument("corpus_db", type=click.Path(dir_okay=False))
-def stackexchange_corpus_create(posts_file, comments_file, users_file, corpus_db):
+def stackexchange_corpus_add_site(
+    posts_file, comments_file, users_file, site_url, corpus_db
+):
     """
     Create a simple corpus database from the stackexchange XML data dumps.
 
     The data dumps for all sites can be found here:
     https://archive.org/download/stackexchange
 
-    If the corpus exists already, the content will be replaced with the
-    contents of the files.
+    Dumps from multiple sites can be added to the same corpus. The site_url
+    value is used to differentiate the source site, and to construct URLs to
+    link directly to live data - this should be the base URL of the site
+    associated with the dump, such as `https://stackoverflow.com` or
+    `https://travel.stackexchange.com`.
 
     """
-    click.echo(f"Replacing existing contents of {corpus_db} with {posts_file}.")
+    click.echo(f"Adding {site_url} data into {corpus_db}.")
 
     doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
 
-    doc_corpus.replace_docs(posts_file, comments_file, users_file)
+    doc_corpus.add_site_data(posts_file, comments_file, users_file, site_url)
 
 
 @stackexchange_corpus.command(name="index")

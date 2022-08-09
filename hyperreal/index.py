@@ -437,6 +437,9 @@ class Index:
             self.db.execute("attach ? as merged", [merge_file])
             to_detach = True
 
+            # In cases where the index has been changed significantly,
+            # this step can be very slow. It might be better to handle
+            # those cases some other way?
             self.db.execute(
                 """
                 delete from inverted_index
@@ -505,6 +508,7 @@ class Index:
 
         except Exception:
             self.db.execute("rollback")
+            raise
 
         finally:
             tempdir.cleanup()
@@ -1071,6 +1075,7 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path):
                 (
                     (field, value, len(doc_ids), doc_ids)
                     for value, doc_ids in values.items()
+                    if value is not None
                 ),
             )
 

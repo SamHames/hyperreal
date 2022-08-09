@@ -190,14 +190,34 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "StackExchangeCorpus"
 
-    def replace_docs(self, posts_file, comments_file, users_file):
-        """Completely replace the content of the corpus with the content of these files."""
+    def add_site_data(self, posts_file, comments_file, users_file, site_url):
+        """
+        Add the data for a specific stackexchange site to the model.
+
+        The site_url is used for differentiating sites, and constructing links
+        to relevant pages on the correct site.
+
+        Existing rows in the database will be replaced, so it is possible to
+        update with newer data, however if data is missing from the archive
+        dump that was present earlier, the state of the history may be
+        inconsistent. It may be better to recreate the entire state from
+        scratch in this case.
+
+        """
         self.db.execute("pragma journal_mode=WAL")
         self.db.executescript(
             """
-            drop table if exists Post;
-            create table Post(
-                Id integer primary key,
+            create table if not exists Site(
+                site_id integer primary key,
+                site_url unique
+            );
+
+            create table if not exists Post(
+                -- doc_id is a surrogate key necessary for indexing.
+                -- The natural key is (site_id, Id).
+                doc_id integer primary key,
+                site_id integer references Site,
+                Id integer,
                 OwnerUserId integer,
                 AcceptedAnswerId integer references Post,
                 ContentLicense text,
@@ -210,24 +230,28 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 Body text,
                 LastActivityDate datetime,
                 CommentCount integer,
-                PostType text
+                PostType text,
+                unique(site_id, Id),
+                foreign key (site_id, OwnerUserId) references User(site_id, Id)
             );
 
-            drop table if exists comment;
-            create table comment(
+            create table if not exists comment(
                 CreationDate datetime,
                 ContentLicense text,
                 Score integer,
                 Text text,
-                UserId integer references User(Id),
-                PostId integer references Post(Id),
-                Id integer primary key
+                UserId integer,
+                PostId integer,
+                Id integer,
+                site_id integer references Site,
+                primary key (site_id, Id),
+                foreign key (site_id, UserId) references User(site_id, Id),
+                foreign key (site_id, PostId) references Post(site_id, Id)
             );
 
-            create index post_comment on comment(PostId);
+            create index if not exists post_comment on comment(site_id, PostId);
 
-            drop table if exists User;
-            create table User(
+            create table if not exists User(
                 AboutMe text,
                 CreationDate datetime,
                 Location text,
@@ -235,19 +259,22 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 WebsiteUrl text,
                 AccountId integer,
                 Reputation integer,
-                Id integer primary key,
+                Id integer,
                 Views integer,
                 UpVotes integer,
                 DownVotes integer,
                 DisplayName text,
-                LastAccessDate datetime
+                LastAccessDate datetime,
+                site_id integer references Site,
+                primary key (site_id, Id)
             );
 
-            drop table if exists PostTag;
-            create table PostTag(
-                PostId integer references Post,
+            create table if not exists PostTag(
+                site_id integer references Site,
+                PostId integer,
                 Tag text,
-                primary key (PostId, Tag)
+                primary key (site_id, PostId, Tag),
+                foreign key (site_id, PostId) references Post
             );
 
             """
@@ -258,6 +285,15 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
             # Process Posts, which includes both questions and answers.
             tag_splitter = re.compile("<|>|<>")
+
+            self.db.execute(
+                "insert or ignore into Site(site_url) values(?)", [site_url]
+            )
+            site_id = list(
+                self.db.execute(
+                    "select site_id from Site where site_url = ?", [site_url]
+                )
+            )[0]["site_id"]
 
             tree = ElementTree.iterparse(posts_file, events=("end",))
             post_types = {"1": "Question", "2": "Answer"}
@@ -273,10 +309,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
                 doc["PostType"] = post_types[elem.attrib["PostTypeId"]]
+                doc["site_id"] = site_id
 
                 self.db.execute(
                     """
-                    insert into post values (
+                    replace into post values (
+                        null,
+                        :site_id,
                         :Id,
                         :OwnerUserId,
                         :AcceptedAnswerId,
@@ -297,12 +336,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 )
 
                 tag_insert = (
-                    (elem.attrib["Id"], t)
+                    (site_id, elem.attrib["Id"], t)
                     for t in tag_splitter.split(elem.attrib.get("Tags", ""))
                     if t
                 )
 
-                self.db.executemany("insert into PostTag values(?, ?)", tag_insert)
+                self.db.executemany("replace into PostTag values(?, ?, ?)", tag_insert)
 
                 # This is important when using iterparse to free memory from
                 # processed nodes in the tree.
@@ -314,17 +353,19 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
+                doc["site_id"] = site_id
 
                 self.db.execute(
                     """
-                    insert into comment values (
+                    replace into comment values (
                         :CreationDate,
                         :ContentLicense,
                         :Score,
                         :Text,
                         :UserId,
                         :PostId,
-                        :Id
+                        :Id,
+                        :site_id
                     )
                     """,
                     doc,
@@ -337,10 +378,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
+                doc["site_id"] = site_id
 
                 self.db.execute(
                     """
-                    insert into user values (
+                    replace into user values (
                         :AboutMe,
                         :CreationDate,
                         :Location,
@@ -353,7 +395,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                         :UpVotes,
                         :DownVotes,
                         :DisplayName,
-                        :LastAccessDate
+                        :LastAccessDate,
+                        :site_id
                     )
                     """,
                     doc,
@@ -380,14 +423,28 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc = list(
                     self.db.execute(
                         """
-                        select 
+                        SELECT
+                            site_url,
+                            site_id,
+                            Id,
                             Title,
                             Body,
                             -- Used to retrieve tags for the root question, as
                             -- the tags are not present on answers, only questions.
-                            coalesce(ParentId, Id) as TagPostId
-                        from post 
-                        where post.Id = ?
+                            coalesce(ParentId, Id) as TagPostId,
+                            coalesce(
+                                (
+                                    select DisplayName
+                                    from User
+                                    where
+                                        (User.site_id, User.Id) =
+                                        (Post.site_id, Post.OwnerUserId)
+                                ),
+                                '<Deleted User>'
+                            ) as DisplayName
+                        from Post
+                        inner join Site using(site_id)
+                        where Post.doc_id = ?
                         """,
                         [key],
                     )
@@ -397,15 +454,32 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc["Tags"] = [
                     r["Tag"]
                     for r in self.db.execute(
-                        "select Tag from PostTag where PostId = ?", [doc["TagPostId"]]
+                        "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
+                        doc,
                     )
                 ]
 
-                # Use the tags on the question, not the (absent) tags on the answer.
+                # Note we're indexing by AccountId, which is stable across all SX sites,
+                # not the local user ID.
                 doc["UserComments"] = list(
                     self.db.execute(
-                        "select UserId, Text from comment where PostId = ?",
-                        [key],
+                        """
+                        SELECT
+                            coalesce(
+                                (
+                                    select DisplayName
+                                    from User
+                                    where
+                                        (User.site_id, User.Id) =
+                                        (comment.site_id, comment.UserId)
+                                ),
+                                '<Deleted User>'
+                            ) as DisplayName,
+                            Text
+                        from comment
+                        where (comment.site_id, comment.PostId) = (:site_id, :Id)
+                        """,
+                        doc,
                     )
                 )
 
@@ -419,7 +493,22 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         <details>
             <summary>{{ base_fields["PostType"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
             
+            <a href="{{ '{}/questions/{}'.format(base_fields["site_url"], base_fields["Id"])  }}">Live Link</a>
+
             {{ base_fields["Body"] }}
+
+            <p>
+                <small>
+                    Copyright {{ base_fields["ContentLicense"]}} by
+                    {% if base_fields["OwnerUserId"] %}
+                    <a href="{{ '{}/users/{}'.format(base_fields["site_url"], base_fields["OwnerUserId"]) }}">
+                        {{ base_fields["DisplayName"] }}
+                    </a>
+                    {% else %}
+                    <Deleted User>
+                    {% endif %}
+                </small>
+            </p>
 
             <details>
                 <summary>Tags:</summary>
@@ -432,7 +521,18 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 <summary>Comments:</summary>
                 <ul>
                     {% for comment in user_comments %}
-                        <li>{{ comment["Text"] }}</li>
+                        <li>{{ comment["Text"] }}
+                            <small>
+                                Copyright {{ comment["ContentLicense"]}} by
+                                {% if comment["UserId"] %}
+                                <a href="{{ '{}/users/{}'.format(comment["site_url"], comment["UserId"]) }}">
+                                    {{ comment["DisplayName"] }}
+                                </a>
+                                {% else %}
+                                <Deleted User>
+                                {% endif %}
+                            </small>
+                        </li>
                     {% endfor %}
                 </ul>
             </details>
@@ -446,14 +546,31 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             self.db.execute(
                 """
                 select 
+                    Post.site_id,
+                    site_url,
+                    Post.Id,
+                    -- Used to retrieve tags for the root question, as
+                    -- the tags are not present on answers, only questions.
+                    coalesce(Post.ParentId, Post.Id) as TagPostId,
+                    Post.OwnerUserId,
+                    (
+                        select DisplayName
+                        from User
+                        where
+                            (User.site_id, User.Id) =
+                            (Post.site_id, Post.OwnerUserId)
+                    ) as DisplayName,
+                    post.ContentLicense,
                     post.PostType, 
                     post.Body,
                     coalesce(Post.Title, parent.Title) as QuestionTitle,
                     coalesce(Post.ParentId, Post.Id) as TagPostId
                 from Post 
+                inner join site using(site_id)
                 left outer join Post parent 
-                    on parent.Id = Post.ParentId
-                where Post.Id = ?
+                    on (parent.site_id, parent.Id) =
+                        (Post.site_id, Post.ParentId)
+                where Post.doc_id = ?
                 """,
                 [key],
             )
@@ -462,14 +579,31 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         tags = "\n".join(
             f"<li>  { r['Tag'] }"
             for r in self.db.execute(
-                "select Tag from PostTag where PostId = ?", [base_fields["TagPostId"]]
+                "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
+                base_fields,
             )
         )
 
         user_comments = list(
             self.db.execute(
-                "select UserId, Text from comment where PostId = ?",
-                [key],
+                """
+                select
+                    site_url,
+                    UserId,
+                    (
+                        select DisplayName
+                        from User
+                        where
+                            (User.site_id, User.Id) =
+                            (comment.site_id, comment.UserId)
+                    ) as DisplayName,
+                    Text,
+                    ContentLicense
+                from comment
+                inner join site using(site_id)
+                where (site_id, PostId) = (:site_id, :Id)
+                """,
+                base_fields,
             )
         )
 
@@ -489,10 +623,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         return docs
 
     def keys(self):
-        return (r["Id"] for r in self.db.execute("select Id from post"))
+        return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
     def index(self, doc):
         return {
+            "UserPosting": [doc["DisplayName"]],
             "Post": hyperreal.utilities.tokens(
                 (doc["Title"] or "")
                 + " "
@@ -503,12 +638,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             ),
             "Tag": doc["Tags"],
             # Comments from deleted users remain, but have no UserId associated.
-            "UsersCommenting": [
-                u["UserId"] for u in doc["UserComments"] if u["UserId"] is not None
-            ],
+            "UserCommenting": [u["DisplayName"] for u in doc["UserComments"]],
             "Comment": [
                 t
                 for c in doc["UserComments"]
                 for t in hyperreal.utilities.tokens(c["Text"])
             ],
+            "Site": [doc["site_url"]],
         }
