@@ -81,6 +81,13 @@ def test_model_creation(example_index_path, n_clusters):
     assert len(index.cluster_ids) == len(index.top_cluster_features())
     assert 1 < len(index.cluster_ids) <= n_clusters
 
+    # Initialising with a field that doesn't exist should create an empty model.
+    index.initialise_clusters(n_clusters, include_fields=["banana"])
+    index.refine_clusters(iterations=3)
+
+    assert len(index.cluster_ids) == len(index.top_cluster_features())
+    assert 0 == len(index.cluster_ids)
+
 
 def test_model_editing(example_index_path):
     """Test editing functionality on an index."""
