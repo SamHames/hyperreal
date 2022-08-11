@@ -377,7 +377,6 @@ class Index:
                             segment_path, level = f.result()
                             to_merge[level].append(segment_path)
 
-                        print(to_merge)
                         for level, paths in list(to_merge.items()):
                             if len(paths) >= merge_batches:
                                 to_merge[level] = []
@@ -421,6 +420,8 @@ class Index:
                                 *paths,
                             )
                         )
+
+            print("executing final merge")
 
             final_merge = self.pool.submit(
                 _merge_indices,
