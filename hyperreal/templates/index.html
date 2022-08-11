@@ -2,6 +2,8 @@
 
 {% block title %}Feature Clustering{% endblock %}
 
+{% from 'macros.html' import render_cluster %}
+
 {% block nav %}<li><a href="/index/{{ index_id }}">Index overview</a></li>{% endblock %}
 
 {% block content %}
@@ -10,7 +12,7 @@
     <form method="post" action="/index/{{ index_id }}/cluster/delete">
         <label for="cluster_selection">Choose clusters:</label>
         <select name="cluster_id" id="cluster_selection" multiple>
-            {% for cluster_id, features in clusters %}
+            {% for cluster_id, _, features in clusters %}
             <option value="{{ cluster_id }}">
                 {% for feature_id, field, value, count in features %}
                 {{ field }}: {{ value }}
@@ -25,32 +27,12 @@
 
 <ul class="cluster-list">
 
-    {% for cluster_id, features in clusters[:1] %}
-    <li {% if cluster_id == highlight_cluster_id %}class="highlight"{% endif %}>
-        <ul class="compact-cluster">
-            {% for feature_id, field, value, score in features %}
-            <li {% if feature_id == highlight_feature_id %}class="highlight"{% endif %}>
-                <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
-                    <div class="feature">
-                        <span class="field">{{ field }}</span>
-                        <span class="value">{{ value }}</span>
-                        <span class="score">{{ ("{0:0.2f}" if score <= 1.0 else "{0:g}").format(score) }}</span>
-                    </div>
-                </a>
-            </li>
-            {% endfor %}
-            <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">...</a>
-        </ul>
-        <a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot</a>
-        <details>
-            <summary>Edit</summary>
-            <form method="post" action="/index/{{ index_id }}/cluster/delete">
-                <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
-                <button class="inline-button" type="submit">Delete 🗑️</button>
-            </form>
-        </details>
-    </li>
+    {% for cluster_id, cluster_score, features in clusters[:1] %}
+        <li>
+            {{ render_cluster(index_id, cluster_id, cluster_score, features, highlight_cluster_id, highlight_feature_id) }}
+        </li>
     {% endfor %}
+
     {% if rendered_docs %}
     <li>
         <p>{% if rendered_docs|length < total_docs %}Sample of the {{ total_docs }} matching documents.{% else %}All {{ total_docs }} matching documents.{% endif %}</p>
@@ -61,30 +43,10 @@
         </ul>
     </li>
     {% endif %}
-    {% for cluster_id, features in clusters[1:] %}
-    <li {% if cluster_id == highlight_cluster_id %}class="highlight"{% endif %}>
-        <ul class="compact-cluster">
-            {% for feature_id, field, value, score in features %}
-            <li {% if feature_id == highlight_feature_id %}class="highlight"{% endif %}>
-                <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
-                    <div class="feature">
-                        <span class="field">{{ field }}</span>
-                        <span class="value">{{ value }}</span>
-                        <span class="score">{{ ("{0:0.2f}" if score <= 1.0 else "{0:g}").format(score) }}</span>
-                    </div>
-                </a>
-            </li>
-            {% endfor %}
-            <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">...</a>
-        </ul>
-        <a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot</a>
-        <details>
-            <summary>Edit</summary>
-            <form method="post" action="/cluster/delete">
-                <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
-                <button class="inline-button" type="submit">Delete 🗑️</button>
-            </form>
-        </details>
+
+    {% for cluster_id, cluster_score, features in clusters[1:] %}
+    <li>
+        {{ render_cluster(index_id, cluster_id, cluster_score, features, highlight_cluster_id, highlight_feature_id) }}
     </li>
     {% endfor %}
 </ul>

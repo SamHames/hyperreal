@@ -219,7 +219,7 @@ def test_pivoting(example_index_path):
     # features.
     for query in [("text", "the"), ("text", "denied")]:
         pivoted = index.pivot_clusters_by_query(index[query], top_k=2)
-        for cluster_id, features in pivoted:
+        for cluster_id, weight, features in pivoted:
             # This feature should be first in the cluster, but the cluster
             # containing it may not always be first.
             if query == features[0][1:3]:

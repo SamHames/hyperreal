@@ -1,0 +1,36 @@
+{% macro render_feature(index_id, feature_id, field, value, score, highlight_feature_id=None) %}
+<div {% if feature_id == highlight_feature_id %}class="highlight"{% endif %}>
+    <a class="feature-link" href="/index/{{ index_id }}/?feature_id={{ feature_id }}">
+        <div class="feature">
+            <span class="field">{{ field }}</span>
+            <span class="value">{{ value }}</span>
+            <span class="score">{{ ("{0:0.2f}" if score <= 1.0 else "{0:g}").format(score) }}</span>
+        </div>
+    </a>
+</div>
+{%- endmacro %}
+
+
+{% macro render_cluster(index_id, cluster_id, cluster_score, features, highlight_cluster_id=None, highlight_feature_id=None) -%}
+<div {% if cluster_id == highlight_cluster_id %}class="highlight"{% endif %}>
+    <div class="cluster-header">
+        Cluster {{ cluster_id }} - {{ ("{0:0.2f}" if cluster_score <= 1.0 else "{0:g}").format(cluster_score) }}
+    </div>
+    <ul class="compact-cluster">
+        {% for feature_id, field, value, score in features %}
+        <li >
+            {{ render_feature(index_id, feature_id, field, value, score, highlight_feature_id=highlight_feature_id)}}
+        </li>
+        {% endfor %}
+        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">See all</a>
+    </ul>
+    <a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot</a>
+    <details>
+        <summary>Edit</summary>
+        <form method="post" action="/index/{{ index_id }}/cluster/delete">
+            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
+            <button class="inline-button" type="submit">Delete 🗑️</button>
+        </form>
+    </details>
+</div>
+{%- endmacro %}

@@ -645,16 +645,18 @@ class Index:
     def top_cluster_features(self, top_k=20):
         """Return the top_k features according to the number of matching documents."""
 
-        features = [
-            (cluster_id, self.cluster_features(cluster_id, limit=top_k))
-            for cluster_id in self.cluster_ids
-        ]
-
-        clusters = sorted(
-            features,
-            reverse=True,
-            key=lambda r: r[1][0][-1],
+        cluster_docs = self.db.execute(
+            """
+            select cluster_id, docs_count
+            from cluster
+            order by docs_count desc
+            """
         )
+
+        clusters = [
+            (cluster_id, docs_count, self.cluster_features(cluster_id, limit=top_k))
+            for cluster_id, docs_count in cluster_docs
+        ]
 
         return clusters
 
@@ -668,7 +670,7 @@ class Index:
         pivoted = (r for r in self.pool.map(_pivot_cluster_by_query, work) if r[1])
 
         clusters = [
-            (r[0][1], r[1])
+            (r[0][1], r[0][0], r[1])
             for r in sorted(
                 pivoted,
                 reverse=True,
