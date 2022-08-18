@@ -551,11 +551,32 @@ class Index:
         return self.corpus.render_docs_html(doc_keys)
 
     @atomic(writes=True)
-    def initialise_clusters(self, n_clusters, min_docs=1):
+    def initialise_clusters(self, n_clusters, min_docs=1, include_fields=None):
+        """
+        Initialise the model with the given number of clusters.
+
+        Features that retrieve at least `min_docs` are randomly assigned to
+        one of the given clusters.
+
+        `include_fields` can be specified to limit initialising the model to features
+        from only the selected fields.
+
+        """
 
         # Note - foreign key constraints handle all of the associated
         # metadata.
         self.db.execute("delete from cluster")
+
+        self.db.execute("create temporary table if not exists include_field(field)")
+        self.db.execute("delete from include_field")
+
+        if include_fields:
+            self.db.executemany(
+                "insert into include_field values(?)", [[f] for f in include_fields]
+            )
+        else:
+            self.db.execute("insert into include_field select field from field_summary")
+
         self.db.execute(
             """
             insert into feature_cluster
@@ -564,10 +585,15 @@ class Index:
                     abs(random() % ?),
                     docs_count
                 from inverted_index
-                where docs_count >= ?
+                inner join include_field using(field)
+                where
+                    docs_count >= ?
+
             """,
             (n_clusters, min_docs),
         )
+
+        self.db.execute("drop table include_field")
 
     @atomic(writes=True)
     def delete_clusters(self, cluster_ids):
