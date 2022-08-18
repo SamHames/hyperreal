@@ -491,7 +491,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     TEMPLATE = Template(
         """
         <details>
-            <summary>{{ base_fields["PostType"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
+            <summary>{{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
             
             <a href="{{ '{}/questions/{}'.format(base_fields["site_url"], base_fields["Id"])  }}">Live Link</a>
 
