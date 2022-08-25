@@ -451,13 +451,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 )[0]
 
                 # Use the tags on the question, not the (absent) tags on the answer.
-                doc["Tags"] = [
+                doc["Tags"] = {
                     r["Tag"]
                     for r in self.db.execute(
                         "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
                         doc,
                     )
-                ]
+                }
 
                 # Note we're indexing by AccountId, which is stable across all SX sites,
                 # not the local user ID.
@@ -492,7 +492,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         """
         <details>
             <summary>{{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
-            
+
             <a href="{{ '{}/questions/{}'.format(base_fields["site_url"], base_fields["Id"])  }}">Live Link</a>
 
             {{ base_fields["Body"] }}
@@ -545,7 +545,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         base_fields = list(
             self.db.execute(
                 """
-                select 
+                select
                     Post.site_id,
                     site_url,
                     Post.Id,
@@ -561,13 +561,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                             (Post.site_id, Post.OwnerUserId)
                     ) as DisplayName,
                     post.ContentLicense,
-                    post.PostType, 
+                    post.PostType,
                     post.Body,
                     coalesce(Post.Title, parent.Title) as QuestionTitle,
                     coalesce(Post.ParentId, Post.Id) as TagPostId
-                from Post 
+                from Post
                 inner join site using(site_id)
-                left outer join Post parent 
+                left outer join Post parent
                     on (parent.site_id, parent.Id) =
                         (Post.site_id, Post.ParentId)
                 where Post.doc_id = ?
@@ -626,23 +626,26 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
     def index(self, doc):
+
         return {
-            "UserPosting": [doc["DisplayName"]],
-            "Post": hyperreal.utilities.tokens(
-                (doc["Title"] or "")
-                + " "
-                + " ".join(
-                    l.strip()
-                    for l in hyperreal.utilities.text_from_html(doc["Body"] or "")
-                )
-            ),
+            "UserPosting": set([doc["DisplayName"]]),
+            # Note tokenise different components separately, so there are
+            # sentinels included for long distance bigrams.
+            "Post": hyperreal.utilities.tokens((doc["Title"] or "")) +
+            # Todo: this is pretty basic, in the future may want to pull out
+            # some markup into a separate field, like for code.
+            [
+                t
+                for l in hyperreal.utilities.text_from_html(doc["Body"] or "")
+                for t in hyperreal.utilities.tokens(l)
+            ],
             "Tag": doc["Tags"],
             # Comments from deleted users remain, but have no UserId associated.
-            "UserCommenting": [u["DisplayName"] for u in doc["UserComments"]],
+            "UserCommenting": {u["DisplayName"] for u in doc["UserComments"]},
             "Comment": [
                 t
                 for c in doc["UserComments"]
                 for t in hyperreal.utilities.tokens(c["Text"])
             ],
-            "Site": [doc["site_url"]],
+            "Site": set([doc["site_url"]]),
         }

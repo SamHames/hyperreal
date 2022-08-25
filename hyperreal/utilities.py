@@ -1,5 +1,6 @@
 from html.parser import HTMLParser
 from io import StringIO
+import math
 
 from pyroaring import BitMap
 import regex
@@ -36,12 +37,16 @@ plain_text_tokenizer = regex.compile(
 
 def social_media_tokens(entry):
     cleaned = social_media_cleaner.sub("", entry.lower())
-    return [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    tokens.append(None)
+    return tokens
 
 
 def tokens(entry):
     cleaned = entry.lower()
-    return [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    tokens.append(None)
+    return tokens
 
 
 class HTMLTextLines(HTMLParser):
@@ -102,3 +107,67 @@ def bstm(matching, bitslice, top_k):
             break
 
     return g | e
+
+
+def long_distance_bigrams(items, max_window_size, include_items=None):
+    """
+    Return the set of pairs of items from the stream that occur within
+    `max_window_size` of each other.
+
+    The returned value is a set of (item_a, item_b, offset) triples,
+    representing the items and the ordinal distance between them in the
+    stream.
+
+    The stream can be a sequence of any type of items, except None, which is
+    used as a sentinel to indicate boundaries that the window should not
+    cross. For example:
+
+    >>> sorted(
+    ...     long_distance_bigrams(
+    ...         ['a', 'b', 'c', None, 'd', 'e'],
+    ...         2
+    ...     )
+    ... )
+    [('a', 'b', 1), ('a', 'c', 2), ('b', 'c', 1), ('d', 'e', 1)]
+
+    `include_items` is a set of items to consider - if provided values
+    not in this set will not be generated as pairs. This is primarily
+    useful to prefilter items and limit the size of the set returned.
+
+    >>> sorted(
+    ...     long_distance_bigrams(
+    ...         ['a', 'b', 'c', None, 'd', 'e'],
+    ...         2,
+    ...         include_items={'a', 'b', 'd', 'e'}
+    ...     )
+    ... )
+    [('a', 'b', 1), ('d', 'e', 1)]
+
+    """
+
+    bigrams = set()
+
+    if include_items is not None:
+        position_stream = [
+            (i, item)
+            for i, item in enumerate(items)
+            if (item is None or item in include_items)
+        ]
+    else:
+        position_stream = list(enumerate(items))
+
+    for i, (position_a, item_a) in enumerate(position_stream):
+
+        if item_a is None:
+            continue
+
+        for position_b, item_b in position_stream[i + 1 : i + 1 + max_window_size]:
+
+            gap = position_b - position_a
+
+            if item_b is None or (gap > max_window_size):
+                break
+
+            bigrams.add((item_a, item_b, gap))
+
+    return bigrams

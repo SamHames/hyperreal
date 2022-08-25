@@ -14,7 +14,7 @@ database, associated with CURRENT_SCHEMA_VERSION.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 CURRENT_SCHEMA = f"""
     create table if not exists doc_key (
@@ -39,6 +39,15 @@ CURRENT_SCHEMA = f"""
         min_value,
         max_value
     );
+
+    --------
+    create table if not exists skipgram_count (
+        feature_id_a integer references inverted_index(feature_id) on delete cascade,
+        feature_id_b integer references inverted_index(feature_id) on delete cascade,
+        distance integer,
+        docs_count integer,
+        primary key (feature_id_a, feature_id_b, distance)
+    ) without rowid;
 
     --------
     create index if not exists docs_counts on inverted_index(docs_count);
@@ -145,7 +154,8 @@ migrations = {
         [
             "insert into changed_cluster select cluster_id from cluster",
         ],
-    )
+    ),
+    5: ([], []),
 }
 
 
