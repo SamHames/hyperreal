@@ -314,7 +314,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 self.db.execute(
                     """
                     replace into post values (
-                        null,
+                        (select doc_id from Post where (site_id, Id) = (:site_id, :Id)),
                         :site_id,
                         :Id,
                         :OwnerUserId,
