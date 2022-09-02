@@ -27,6 +27,8 @@ def connect_sqlite(db_path, row_factory=None):
         db_path, detect_types=sqlite3.PARSE_DECLTYPES, isolation_level=None
     )
 
+    conn.create_aggregate("roaring_union", 1, RoaringUnion)
+
     if row_factory:
         conn.row_factory = row_factory
 
@@ -44,3 +46,14 @@ def load_bitmap(bm_bytes):
 sqlite3.register_adapter(pyroaring.BitMap, save_bitmap)
 sqlite3.register_adapter(pyroaring.FrozenBitMap, save_bitmap)
 sqlite3.register_converter("roaring_bitmap", load_bitmap)
+
+
+class RoaringUnion:
+    def __init__(self):
+        self.bitmap = pyroaring.BitMap()
+
+    def step(self, bitmap):
+        self.bitmap |= pyroaring.BitMap.deserialize(bitmap)
+
+    def finalize(self):
+        return self.bitmap.serialize()

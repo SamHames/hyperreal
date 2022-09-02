@@ -27,6 +27,9 @@ def plaintext_corpus():
     pass
 
 
+DEFAULT_DOC_BATCH_SIZE = 5000
+
+
 @plaintext_corpus.command(name="create")
 @click.argument("text_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("corpus_db", type=click.Path(dir_okay=False))
@@ -59,12 +62,27 @@ def plaintext_corpus_create(text_file, corpus_db):
 @click.option(
     "--doc_batch_size",
     type=int,
-    default=10000,
+    default=DEFAULT_DOC_BATCH_SIZE,
     help="The size of individual batches of documents sent for indexing. "
     "Larger sizes will require more ram, but might be more efficient for "
     "large collections.",
 )
-def plaintext_corpus_index(corpus_db, index_db, doc_batch_size):
+@click.option(
+    "--skipgram-window-size",
+    default=0,
+    help="Size of window to extract skipgrams from. "
+    "Default is 0, which disables this functionality",
+)
+@click.option(
+    "--skipgram-min-docs",
+    default=3,
+    help="Minimum number of docs containing a skipgram for the count to be retained. "
+    "This threshold limits the size of the table used to store skipgrams - set to 1 "
+    "to keep all counts (not recommended).",
+)
+def plaintext_corpus_index(
+    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
+):
     """
     Creates the index database representing the given plaintext corpus.
 
@@ -76,7 +94,11 @@ def plaintext_corpus_index(corpus_db, index_db, doc_batch_size):
     doc_corpus = hyperreal.corpus.PlainTextSqliteCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index(doc_batch_size=doc_batch_size)
+    doc_index.index(
+        doc_batch_size=doc_batch_size,
+        skipgram_window_size=skipgram_window_size,
+        skipgram_min_docs=skipgram_min_docs,
+    )
 
 
 @plaintext_corpus.command(name="serve")
@@ -144,12 +166,27 @@ def stackexchange_corpus_add_site(
 @click.option(
     "--doc_batch_size",
     type=int,
-    default=10000,
+    default=DEFAULT_DOC_BATCH_SIZE,
     help="The size of individual batches of documents sent for indexing. "
     "Larger sizes will require more ram, but might be more efficient for "
     "large collections.",
 )
-def stackexchange_corpus_index(corpus_db, index_db, doc_batch_size):
+@click.option(
+    "--skipgram-window-size",
+    default=0,
+    help="Size of window to extract skipgrams from. "
+    "Default is 0, which disables this functionality",
+)
+@click.option(
+    "--skipgram-min-docs",
+    default=3,
+    help="Minimum number of docs containing a skipgram for the count to be retained. "
+    "This threshold limits the size of the table used to store skipgrams - set to 1 "
+    "to keep all counts (not recommended).",
+)
+def stackexchange_corpus_index(
+    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
+):
     """
     Creates the index database representing the given Stack Exchange corpus.
 
@@ -161,7 +198,11 @@ def stackexchange_corpus_index(corpus_db, index_db, doc_batch_size):
     doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index(doc_batch_size=doc_batch_size)
+    doc_index.index(
+        doc_batch_size=doc_batch_size,
+        skipgram_window_size=skipgram_window_size,
+        skipgram_min_docs=skipgram_min_docs,
+    )
 
 
 @stackexchange_corpus.command(name="serve")
@@ -229,7 +270,11 @@ def model(index_db, iterations, clusters, min_docs, restart, include_field):
             )
     else:
         click.echo(f"Creating new feature cluster model with {clusters} on {index_db}.")
-        doc_index.initialise_clusters(n_clusters=clusters, min_docs=min_docs)
+        doc_index.initialise_clusters(
+            n_clusters=clusters,
+            min_docs=min_docs,
+            include_fields=include_field or None,
+        )
 
     click.echo(f"Refining for {iterations} iterations on {index_db}.")
     doc_index.refine_clusters(iterations=iterations)

@@ -62,7 +62,8 @@ def test_indexing(tmp_path, corpus, args, kwargs):
         target_docs = 0
         for d in docs:
             target_docs += 1
-            target_nnz += len(set(hyperreal.utilities.tokens(d)))
+            # Note, exclude the None sentinel at the end.
+            target_nnz += len(set(hyperreal.utilities.tokens(d)[:-1]))
 
     nnz = list(i.db.execute("select sum(docs_count) from inverted_index"))[0][0]
     total_docs = list(i.db.execute("select count(*) from doc_key"))[0][0]
