@@ -285,7 +285,8 @@ class Index:
         doc_batch_size=1000,
         merge_batches=10,
         working_dir=None,
-        skipgram_window_size=4,
+        skipgram_window_size=0,
+        skipgram_min_docs=3,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -530,7 +531,9 @@ class Index:
                     distance,
                     docs_count
                 from merged.skipgram_count msc
-                """
+                where docs_count >= ?
+                """,
+                [skipgram_min_docs],
             )
 
             # Write the field summary
@@ -1139,17 +1142,16 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size):
             features = corpus.index(doc)
             for field, values in features.items():
 
-                # Duck typing: if we can extract bigrams then do so, otherwise
-                # assume it's not an ordered sequence.
-                try:
+                # Only find bigrams in sequences - non sequence types such as
+                # a set don't make sense to do this.
+                if skipgram_window_size > 0 and isinstance(
+                    values, collections.abc.Sequence
+                ):
                     bigrams = utilities.long_distance_bigrams(
                         values, skipgram_window_size
                     )
                     for item_a, item_b, distance in bigrams:
                         skipgram_counts[distance - 1][field][item_a][item_b] += 1
-
-                except Exception:
-                    pass
 
                 set_values = set(values)
 
@@ -1198,7 +1200,7 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size):
                         "INSERT into skipgram_count values(?, ?, ?, ?, ?)",
                         (
                             (field, item_a, item_b, distance, c)
-                            for item_b, c in item_bs.items()
+                            for item_b, c in sorted(item_bs.items())
                         ),
                     )
 

@@ -67,7 +67,22 @@ def plaintext_corpus_create(text_file, corpus_db):
     "Larger sizes will require more ram, but might be more efficient for "
     "large collections.",
 )
-def plaintext_corpus_index(corpus_db, index_db, doc_batch_size):
+@click.option(
+    "--skipgram-window-size",
+    default=0,
+    help="Size of window to extract skipgrams from. "
+    "Default is 0, which disables this functionality",
+)
+@click.option(
+    "--skipgram-min-docs",
+    default=3,
+    help="Minimum number of docs containing a skipgram for the count to be retained. "
+    "This threshold limits the size of the table used to store skipgrams - set to 1 "
+    "to keep all counts (not recommended).",
+)
+def plaintext_corpus_index(
+    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
+):
     """
     Creates the index database representing the given plaintext corpus.
 
@@ -79,7 +94,11 @@ def plaintext_corpus_index(corpus_db, index_db, doc_batch_size):
     doc_corpus = hyperreal.corpus.PlainTextSqliteCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index(doc_batch_size=doc_batch_size)
+    doc_index.index(
+        doc_batch_size=doc_batch_size,
+        skipgram_window_size=skipgram_window_size,
+        skipgram_min_docs=skipgram_min_docs,
+    )
 
 
 @plaintext_corpus.command(name="serve")
@@ -152,7 +171,22 @@ def stackexchange_corpus_add_site(
     "Larger sizes will require more ram, but might be more efficient for "
     "large collections.",
 )
-def stackexchange_corpus_index(corpus_db, index_db, doc_batch_size):
+@click.option(
+    "--skipgram-window-size",
+    default=0,
+    help="Size of window to extract skipgrams from. "
+    "Default is 0, which disables this functionality",
+)
+@click.option(
+    "--skipgram-min-docs",
+    default=3,
+    help="Minimum number of docs containing a skipgram for the count to be retained. "
+    "This threshold limits the size of the table used to store skipgrams - set to 1 "
+    "to keep all counts (not recommended).",
+)
+def stackexchange_corpus_index(
+    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
+):
     """
     Creates the index database representing the given Stack Exchange corpus.
 
@@ -164,7 +198,11 @@ def stackexchange_corpus_index(corpus_db, index_db, doc_batch_size):
     doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
     doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-    doc_index.index(doc_batch_size=doc_batch_size)
+    doc_index.index(
+        doc_batch_size=doc_batch_size,
+        skipgram_window_size=skipgram_window_size,
+        skipgram_min_docs=skipgram_min_docs,
+    )
 
 
 @stackexchange_corpus.command(name="serve")
