@@ -36,17 +36,31 @@ def example_index_corpora_path(tmp_path):
 
 # This is a list of tuples, corresponding to the corpus class to test, and the
 # concrete arguments to that class to instantiate against the test data.
+def check_alice():
+    with open("tests/data/alice30.txt", "r", encoding="utf-8") as f:
+        docs = (line[0] for line in csv.reader(f) if line and line[0].strip())
+        target_nnz = 0
+        target_docs = 0
+        for d in docs:
+            target_docs += 1
+            # Note, exclude the None sentinel at the end.
+            target_nnz += len(set(hyperreal.utilities.tokens(d)[:-1]))
+
+    return target_docs, target_nnz
+
+
 corpora_test_cases = [
     (
         hyperreal.corpus.PlainTextSqliteCorpus,
         [pathlib.Path("tests", "corpora", "alice.db")],
         {},
+        check_alice,
     )
 ]
 
 
-@pytest.mark.parametrize("corpus,args,kwargs", corpora_test_cases)
-def test_indexing(tmp_path, corpus, args, kwargs):
+@pytest.mark.parametrize("corpus,args,kwargs,check_stats", corpora_test_cases)
+def test_indexing(tmp_path, corpus, args, kwargs, check_stats):
     """Test that all builtin corpora can be successfully indexed and queried."""
     c = corpus(*args, **kwargs)
     i = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c)
@@ -56,14 +70,7 @@ def test_indexing(tmp_path, corpus, args, kwargs):
     i.index(doc_batch_size=10)
 
     # Compare against the actual test data.
-    with open("tests/data/alice30.txt", "r", encoding="utf-8") as f:
-        docs = (line[0] for line in csv.reader(f) if line and line[0].strip())
-        target_nnz = 0
-        target_docs = 0
-        for d in docs:
-            target_docs += 1
-            # Note, exclude the None sentinel at the end.
-            target_nnz += len(set(hyperreal.utilities.tokens(d)[:-1]))
+    target_docs, target_nnz = check_stats()
 
     nnz = list(i.db.execute("select sum(docs_count) from inverted_index"))[0][0]
     total_docs = list(i.db.execute("select count(*) from doc_key"))[0][0]
