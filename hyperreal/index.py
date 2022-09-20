@@ -113,7 +113,7 @@ def atomic(writes=False):
 
 
 class Index:
-    def __init__(self, db_path, corpus=None, pool=None):
+    def __init__(self, db_path, corpus=None, pool=None, random_seed=None):
         """
         The corpus object is optional - if not provided certain operations such
         as retrieving or rendering documents won't be possible.
@@ -125,9 +125,15 @@ class Index:
         Note that the index is structured so that db_path is the only necessary
         state, and can always be reinitialised from just that path.
 
+        A random seed can be specified - this will be used with the standard
+        library's random module to fix the seed state + enable some kinds of
+        reproducibility. Note that this isn't guaranteed to be consistent
+        across Python versions.
+
         """
         self.db_path = db_path
         self.db = db_utilities.connect_sqlite(self.db_path)
+        self.random = random.Random(random_seed)
 
         self._pool = pool
 
@@ -597,7 +603,7 @@ class Index:
             q = len(query)
             if q > random_sample_size:
                 query = BitMap(
-                    query[i] for i in random.sample(range(q), random_sample_size)
+                    query[i] for i in self.random.sample(range(q), random_sample_size)
                 )
 
         doc_keys = self.convert_query_to_keys(query)
@@ -630,20 +636,37 @@ class Index:
         else:
             self.db.execute("insert into include_field select field from field_summary")
 
-        self.db.execute(
-            """
-            insert into feature_cluster
+        feature_ids = list(
+            self.db.execute(
+                """
                 select
                     feature_id,
-                    abs(random() % ?),
                     docs_count
                 from inverted_index
                 inner join include_field using(field)
-                where
-                    docs_count >= ?
+                where docs_count >= ?
+                -- Note: specify the ordering to ensure reproducibility, as these
+                -- results will be shuffled.
+                order by feature_id
+                """,
+                [min_docs],
+            )
+        )
 
+        self.random.shuffle(feature_ids)
+
+        clusters = ((i, feature_ids[i::n_clusters]) for i in range(n_clusters))
+
+        self.db.executemany(
+            """
+            insert into feature_cluster(cluster_id, feature_id, docs_count)
+                values(?, ?, ?)
             """,
-            (n_clusters, min_docs),
+            (
+                (cluster_id, *feature)
+                for cluster_id, features in clusters
+                for feature in features
+            ),
         )
 
         self.db.execute("drop table include_field")
@@ -894,7 +917,7 @@ class Index:
             # We want a completely different order of feature checks on each
             # iteration. This randomised ordering is also used to break into
             # sub batches for checking.
-            random.shuffle(features)
+            self.random.shuffle(features)
 
             # More subiterations --> Less perturbation of the model for each
             # set of features, at the cost of more time for each subiteration.
@@ -908,7 +931,7 @@ class Index:
 
                 # Just like the features, we want random assignments of
                 # clusters to batches in each subiteration.
-                random.shuffle(cluster_ids)
+                self.random.shuffle(cluster_ids)
 
                 # We may lose clusters if everything in that cluster is moved
                 # somewhere else
@@ -1013,7 +1036,7 @@ class Index:
         k = k or math.ceil(len(cluster_features) ** 0.5)
 
         feature_ids = [r[0] for r in cluster_features]
-        random.shuffle(feature_ids)
+        self.random.shuffle(feature_ids)
 
         split_cluster_features = {i: set(feature_ids[i::k]) for i in range(k)}
 

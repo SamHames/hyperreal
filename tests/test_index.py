@@ -254,3 +254,28 @@ def test_create_new_features(example_index_corpora_path):
     index.index()
 
     assert not len(index[new_feature_key])
+
+
+@pytest.mark.parametrize("n_clusters", [4, 8, 16])
+def test_fixed_seed(example_index_path, n_clusters):
+    """Test creation of a model (the core numerical component!)."""
+    index = hyperreal.index.Index(example_index_path, random_seed=10)
+
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=1)
+
+    clustering_1 = index.top_cluster_features()
+    split_1 = index.propose_cluster_split(1, iterations=1)
+
+    # Note we need to initialise a new object with the random seed, otherwise
+    # as each random operation consumes items from the stream.
+    index = hyperreal.index.Index(example_index_path, random_seed=10)
+
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=1)
+
+    clustering_2 = index.top_cluster_features()
+    split_2 = index.propose_cluster_split(1, iterations=1)
+
+    assert clustering_1 == clustering_2
+    assert split_1 == split_2
