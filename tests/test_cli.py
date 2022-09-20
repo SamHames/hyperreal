@@ -68,6 +68,10 @@ def test_twittersphere_corpus(tmp_path):
             str(target_index_db),
         ],
     )
+
+    if result.exit_code != 0:
+        print(result.output)
+
     assert result.exit_code == 0
 
     # Model
