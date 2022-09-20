@@ -326,9 +326,17 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 @click.option(
     "--restart", default=False, is_flag=True, help="Restart the model from scratch."
 )
-def model(index_db, iterations, clusters, min_docs, restart, include_field):
+@click.option(
+    "--random-seed",
+    default=None,
+    type=int,
+    help="Specify a random seed for a model run. Best used with restart",
+)
+def model(
+    index_db, iterations, clusters, min_docs, restart, include_field, random_seed
+):
 
-    doc_index = hyperreal.index.Index(index_db)
+    doc_index = hyperreal.index.Index(index_db, random_seed=random_seed)
 
     # Check if any clusters exist.
     has_clusters = bool(doc_index.cluster_ids)
