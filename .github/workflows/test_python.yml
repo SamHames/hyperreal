@@ -12,6 +12,7 @@ on:
 jobs:
   prepare-test-data:
     runs-on: ubuntu-latest
+    concurrency: twitter-streaming-api-key
     steps:
     - uses: actions/checkout@v2
     - name: Set up Python
@@ -46,6 +47,7 @@ jobs:
       uses: actions/download-artifact@v3
       with:
         name: test-twitter-data
+        path: tests/corpora/twitter.db
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
       with:
