@@ -47,11 +47,14 @@ jobs:
       uses: actions/download-artifact@v3
       with:
         name: test-twitter-data
-        path: tests/corpora/twitter.db
+        path: tests/corpora/
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Check artifact
+      run: |
+        ls tests/corpora
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
