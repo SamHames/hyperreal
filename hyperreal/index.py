@@ -471,37 +471,25 @@ class Index:
             self.db.execute("attach ? as merged", [merge_file])
             to_detach = True
 
-            # In cases where the index has been changed significantly,
-            # this step can be very slow. It might be better to handle
-            # those cases some other way?
+            # Zero out existing features, but don't reassign them
             self.db.execute(
-                """
-                delete from inverted_index
-                where (field, value) not in (
-                    select field, value
-                    from merged.inverted_index_segment
-                )
-                """
+                "update inverted_index set docs_count = 0, doc_ids = ?",
+                [BitMap()],
             )
 
-            # New features will be inserted
+            # Ensure there's a feature_id for every field, value
             self.db.execute(
                 """
-                insert into inverted_index(
-                    field, value, docs_count, doc_ids
-                )
-                    select *
+                insert or ignore into inverted_index
+                    select null, field, value, 0, ?
                     from merged.inverted_index_segment
-                    where (field, value) not in (
-                        select field, value
-                        from main.inverted_index
-                    )
                     -- Assign smaller feature_ids to more
                     -- frequent features.
                     order by docs_count desc
-                """
+                """,
+                [BitMap()],
             )
-            # Existing features will be updated.
+            # Update all features that are present in the new indexing.
             self.db.execute(
                 """
                 update inverted_index set
@@ -516,6 +504,18 @@ class Index:
                     select field, value
                     from merged.inverted_index_segment
                 )
+                """
+            )
+
+            # Update docs_counts in the clusters
+            self.db.execute(
+                """
+                update feature_cluster set
+                    docs_count = (
+                        select docs_count
+                        from inverted_index ii
+                        where ii.feature_id = feature_cluster.feature_id
+                    )
                 """
             )
 
@@ -898,6 +898,12 @@ class Index:
             feature_id: cluster_id
             for cluster_id, features in cluster_feature.items()
             for feature_id in features
+        }
+
+        # Make sure to copy the input dict
+        cluster_feature = {
+            cluster_id: features.copy()
+            for cluster_id, features in cluster_feature.items()
         }
 
         features = list(feature_cluster)

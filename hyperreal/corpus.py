@@ -12,6 +12,7 @@ shows concrete implementation examples.
 import abc
 from collections import defaultdict
 import gzip
+import html
 import json
 import re
 from typing import Protocol, runtime_checkable
@@ -648,4 +649,87 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 for t in hyperreal.utilities.tokens(c["Text"])
             ],
             "Site": set([doc["site_url"]]),
+        }
+
+
+class TwittersphereCorpus(SqliteBackedCorpus):
+
+    CORPUS_TYPE = "TwittersphereCorpus"
+
+    def docs(self, doc_keys=None):
+        self.db.execute("savepoint docs")
+
+        try:
+            # Note that it's valid to pass an empty sequence of doc_keys,
+            # so we need to check sentinel explicitly.
+            if doc_keys is None:
+                doc_keys = self.keys()
+
+            for tweet_id in doc_keys:
+
+                doc = list(
+                    self.db.execute(
+                        """
+                        SELECT
+                            user_id,
+                            tweet_id,
+                            retrieved_at,
+                            created_at,
+                            text
+                        from tweet_latest
+                        where tweet_id = ?
+                        """,
+                        [tweet_id],
+                    )
+                )[0]
+
+                doc["hashtags"] = {
+                    r["tag"]
+                    for r in self.db.execute(
+                        "select lower(hashtag) as tag from tweet_hashtag where tweet_id = ?",
+                        [tweet_id],
+                    )
+                }
+
+                doc["mentions"] = {
+                    r["mentioned_username"]
+                    for r in self.db.execute(
+                        """
+                        select
+                            lower(mentioned_username) as mentioned_username
+                        from tweet_mention
+                        where tweet_id = ?
+                        """,
+                        [tweet_id],
+                    )
+                }
+
+                doc["text"] = html.unescape(doc["text"])
+
+                yield tweet_id, doc
+
+        finally:
+            self.db.execute("release docs")
+
+    def render_docs_html(self, doc_keys):
+        self.db.execute("savepoint render_docs_html")
+
+        docs = [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
+
+        self.db.execute("release render_docs_html")
+
+        return docs
+
+    def keys(self):
+        return (
+            r["tweet_id"]
+            for r in self.db.execute("select tweet_id from directly_collected_tweet")
+        )
+
+    def index(self, doc):
+        tokens = hyperreal.utilities.social_media_tokens(doc["text"])
+        return {
+            "text": tokens,
+            "#": doc["hashtags"],
+            "@": doc["mentions"],
         }
