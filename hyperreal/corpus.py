@@ -671,11 +671,7 @@ class TwittersphereCorpus(SqliteBackedCorpus):
                     self.db.execute(
                         """
                         SELECT
-                            user_id,
-                            tweet_id,
-                            retrieved_at,
-                            created_at,
-                            text
+                            *
                         from tweet_latest
                         where tweet_id = ?
                         """,
@@ -704,17 +700,54 @@ class TwittersphereCorpus(SqliteBackedCorpus):
                     )
                 }
 
-                doc["text"] = html.unescape(doc["text"])
+                doc["user"] = self._retrieve_user(doc["user_id"])
 
                 yield tweet_id, doc
 
         finally:
             self.db.execute("release docs")
 
+    def _retrieve_user(self, user_id):
+
+        return list(
+            self.db.execute("select * from user_latest where user_id = ?", [user_id])
+        )[0]
+
+    TEMPLATE = Template(
+        """
+        <div>
+            <span>
+            <img src={{ doc["user"]["profile_image_url"] }}>
+            <a href="https://twitter.com/{{ doc["user"]["username"] }}">@{{ doc["user"]["username"] }}</a>
+            {{ doc["user"]["name"] }} on <a href="https://twitter.com/{{ doc["user"]["username"] }}/status/{{ doc["tweet_id"] }}">
+                <time datetime="{{ doc['created_at'] }}">{{ doc['created_at'] }}</time>
+            </a>
+            </span>
+
+            <p>{{ doc["text"] }}</p>
+
+            <details>
+                <summary>Metadata</summary>
+                <dl>
+                    <dt>Likes</dt><dd>{{ doc["like_count"] }}</dd>
+                    <dt>Replies</dt><dd>{{ doc["reply_count"] }}</dd>
+                    <dt>Quote Tweets</dt><dd>{{ doc["quote_count"] }}</dd>
+                    <dt>Retweets</dt><dd>{{ doc["retweet_count"] }}</dd>
+                    <dt>Retrieved at</dt><dd>{{ doc["retrieved_at"] }}</dd>
+                </dl>
+            </details>
+        </div
+
+        """
+    )
+
     def render_docs_html(self, doc_keys):
         self.db.execute("savepoint render_docs_html")
 
-        docs = [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
+        docs = [
+            (key, Markup(self.TEMPLATE.render(doc=doc)))
+            for key, doc in self.docs(doc_keys=doc_keys)
+        ]
 
         self.db.execute("release render_docs_html")
 
@@ -727,7 +760,7 @@ class TwittersphereCorpus(SqliteBackedCorpus):
         )
 
     def index(self, doc):
-        tokens = hyperreal.utilities.social_media_tokens(doc["text"])
+        tokens = hyperreal.utilities.social_media_tokens(html.unescape(doc["text"]))
         return {
             "text": tokens,
             "#": doc["hashtags"],
