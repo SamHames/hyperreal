@@ -561,10 +561,13 @@ class Index:
             self.db.execute(
                 "insert into changed_cluster select cluster_id from cluster"
             )
-            self._update_changed_clusters()
 
             self.db.execute("commit")
             self.db.execute("detach merged")
+
+            self.db.execute("begin")
+            self._update_changed_clusters()
+            self.db.execute("commit")
 
         except Exception:
             self.db.execute("rollback")
