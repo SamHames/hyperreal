@@ -11,6 +11,7 @@ shows concrete implementation examples.
 
 import abc
 from collections import defaultdict
+import datetime as dt
 import gzip
 import html
 import json
@@ -18,10 +19,11 @@ import re
 from typing import Protocol, runtime_checkable
 from xml.etree import ElementTree
 
+from dateutil.parser import isoparse
 from jinja2 import Template
 from markupsafe import Markup
 
-import hyperreal.utilities
+from hyperreal import utilities
 from hyperreal.db_utilities import connect_sqlite, dict_factory
 
 
@@ -179,7 +181,7 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     def index(self, doc):
         return {
-            "text": hyperreal.utilities.tokens(doc["text"]),
+            "text": utilities.tokens(doc["text"]),
         }
 
     def render_docs_html(self, doc_keys):
@@ -442,7 +444,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                                         (Post.site_id, Post.OwnerUserId)
                                 ),
                                 '<Deleted User>'
-                            ) as DisplayName
+                            ) as DisplayName,
+                            CreationDate
                         from Post
                         inner join Site using(site_id)
                         where Post.doc_id = ?
@@ -628,28 +631,36 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
     def index(self, doc):
 
-        return {
+        indexed = {
             "UserPosting": set([doc["DisplayName"]]),
             # Note tokenise different components separately, so there are
             # sentinels included for long distance bigrams.
-            "Post": hyperreal.utilities.tokens((doc["Title"] or "")) +
+            "Post": utilities.tokens((doc["Title"] or "")) +
             # Todo: this is pretty basic, in the future may want to pull out
             # some markup into a separate field, like for code.
             [
                 t
-                for l in hyperreal.utilities.text_from_html(doc["Body"] or "")
-                for t in hyperreal.utilities.tokens(l)
+                for l in utilities.text_from_html(doc["Body"] or "")
+                for t in utilities.tokens(l)
             ],
             "Tag": doc["Tags"],
             # Comments from deleted users remain, but have no UserId associated.
             "UserCommenting": {u["DisplayName"] for u in doc["UserComments"]},
             "Comment": [
-                t
-                for c in doc["UserComments"]
-                for t in hyperreal.utilities.tokens(c["Text"])
+                t for c in doc["UserComments"] for t in utilities.tokens(c["Text"])
             ],
             "Site": set([doc["site_url"]]),
         }
+
+        created_at = isoparse(doc["CreationDate"])
+        rounded_times = utilities.round_datetime(created_at)
+        for granularity, dt in rounded_times.items():
+            # Don't bother indexing at minute/hour granularity - just day/month/year
+            if granularity in ("minute", "hour"):
+                continue
+            indexed[f"created_{granularity}"] = [dt.isoformat()]
+
+        return indexed
 
 
 class TwittersphereCorpus(SqliteBackedCorpus):
@@ -756,13 +767,25 @@ class TwittersphereCorpus(SqliteBackedCorpus):
     def keys(self):
         return (
             r["tweet_id"]
-            for r in self.db.execute("select tweet_id from directly_collected_tweet")
+            for r in self.db.execute(
+                "select tweet_id from directly_collected_tweet order by tweet_id"
+            )
         )
 
     def index(self, doc):
-        tokens = hyperreal.utilities.social_media_tokens(html.unescape(doc["text"]))
-        return {
+        tokens = utilities.social_media_tokens(html.unescape(doc["text"]))
+
+        # Round down datetime to various degrees of granularity
+        created_at = isoparse(doc["created_at"])
+        rounded_times = utilities.round_datetime(created_at)
+
+        indexed = {
             "text": tokens,
             "#": doc["hashtags"],
             "@": doc["mentions"],
         }
+
+        for granularity, dt in rounded_times.items():
+            indexed[f"created_{granularity}"] = [dt.isoformat()]
+
+        return indexed
