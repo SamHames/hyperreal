@@ -17,6 +17,7 @@ import html
 import json
 import re
 from typing import Protocol, runtime_checkable
+from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 from dateutil.parser import isoparse
@@ -711,6 +712,30 @@ class TwittersphereCorpus(SqliteBackedCorpus):
                     )
                 }
 
+                # Extract links outside of Twitter. The API does also return
+                # many internal links, including media, quote tweets, and
+                # occasionally people sharing direct links to other tweets
+                # rather than using platform affordances.
+                doc["external_urls"] = {
+                    r["full_url"]
+                    for r in self.db.execute(
+                        """
+                        select
+                            coalesce(unwound_url, expanded_url, url) as full_url
+                        from tweet_latest
+                        inner join tweet_url using(tweet_id, retrieved_at)
+                        inner join url using(url, retrieved_at)
+                        where tweet_id = ?
+                            and full_url not like 'https://twitter.com/%'
+                        """,
+                        [tweet_id],
+                    )
+                }
+
+                doc["external_domains"] = {
+                    urlparse(url).hostname for url in doc["external_urls"]
+                }
+
                 doc["user"] = self._retrieve_user(doc["user_id"])
 
                 yield tweet_id, doc
@@ -773,6 +798,7 @@ class TwittersphereCorpus(SqliteBackedCorpus):
         )
 
     def index(self, doc):
+
         tokens = utilities.social_media_tokens(html.unescape(doc["text"]))
 
         # Round down datetime to various degrees of granularity
@@ -783,6 +809,10 @@ class TwittersphereCorpus(SqliteBackedCorpus):
             "text": tokens,
             "#": doc["hashtags"],
             "@": doc["mentions"],
+            "conversation_id": [doc["conversation_id"]],
+            "by": [doc["user"]["username"]],
+            "url": doc["external_urls"],
+            "domain": doc["external_domains"],
         }
 
         for granularity, dt in rounded_times.items():
