@@ -666,6 +666,47 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
 class TwittersphereCorpus(SqliteBackedCorpus):
 
+    """
+    A corpus of tweets based on the relational database representation from
+    the Twittersphere tool:
+    https://github.com/QUT-Digital-Observatory/twittersphere
+
+    Modelling Notes
+    ---------------
+
+    Each document in this corpus is a tweet object.
+
+    Only tweets that have been collected directly in response to a query such
+    as a user timeline or search query will be included - tweets that are
+    only included because they are referenced by other Tweets are excluded.
+
+    The latest collected version of each tweet and user object is used: if
+    a user has tweets collected at multiple times, the latest version of their
+    user profile, including username will be usef.
+
+    Tweets are indexed by:
+
+    - The time bucket they were created in (minute/hour/day/month/year)
+    - @mentions
+    - #hashtags
+    - Included external URLs (that is, links to Twitter itself such as in quote tweets are removed)
+    - Domains of included external URLs
+    - The text of the tweet, after removing hashtags, mentions and URLs
+    - The user who created the tweet
+    - The ID of the conversation thread the tweet is part of
+    - The ID of the tweet being replied to, retweeted, or quoted
+    - If retrievable, the user being replied to, retweeted or quoted
+
+    Retweets are treated as references to the original tweet, not as verbatim
+    republication. Thus the only entries indexed in this case are:
+
+    - When the retweet happened
+    - The tweet ID of the tweet being retweeted
+    - The user ID of the account posting the tweet being retweeted
+    - The user who is retweeting the tweet
+
+    """
+
     CORPUS_TYPE = "TwittersphereCorpus"
 
     def docs(self, doc_keys=None):
@@ -738,6 +779,34 @@ class TwittersphereCorpus(SqliteBackedCorpus):
 
                 doc["user"] = self._retrieve_user(doc["user_id"])
 
+                # Retrieve the user profiles of related tweets, if present.
+                # Note that this is not retrievable in all cases - especially
+                # for replies and quote tweets, the underlying reply/quote
+                # tweet may no longer exist, and therefore won't be present.
+                for key in (
+                    "replied_to_tweet_id",
+                    "retweeted_tweet_id",
+                    "quoted_tweet_id",
+                ):
+                    if doc[key] is not None:
+                        key_user = list(
+                            self.db.execute(
+                                """
+                                select user_id, username
+                                from user_at_time
+                                where (user_id, retrieved_at) = (
+                                    select user_id, retrieved_at
+                                    from tweet_latest
+                                    where tweet_id = ?
+                                )
+                                """,
+                                [doc[key]],
+                            )
+                        )
+
+                        if key_user:
+                            doc[key.replace("tweet_id", "user")] = key_user[0]
+
                 yield tweet_id, doc
 
         finally:
@@ -799,21 +868,36 @@ class TwittersphereCorpus(SqliteBackedCorpus):
 
     def index(self, doc):
 
-        tokens = utilities.social_media_tokens(html.unescape(doc["text"]))
-
         # Round down datetime to various degrees of granularity
         created_at = isoparse(doc["created_at"])
         rounded_times = utilities.round_datetime(created_at)
 
-        indexed = {
-            "text": tokens,
-            "#": doc["hashtags"],
-            "@": doc["mentions"],
-            "conversation_id": [doc["conversation_id"]],
-            "by": [doc["user"]["username"]],
-            "url": doc["external_urls"],
-            "domain": doc["external_domains"],
-        }
+        # Note that we only index the full set of items for original tweets
+        # Retweets are indexed as a pointer to the original tweet only.
+        if doc["retweeted_tweet_id"] is None:
+            tokens = utilities.social_media_tokens(html.unescape(doc["text"]))
+
+            indexed = {
+                "text": tokens,
+                "#": doc["hashtags"],
+                "@": doc["mentions"],
+                "conversation_id": [doc["conversation_id"]],
+                "by": [doc["user"]["username"]],
+                "url": doc["external_urls"],
+                "domain": doc["external_domains"],
+                "quoted_tweet_id": [doc["quoted_tweet_id"]],
+                "quoted_user": [doc.get("quoted_user", {}).get("username", None)],
+                "replied_to_tweet_id": [doc["replied_to_tweet_id"]],
+                "replied_to_user": [
+                    doc.get("replied_to_user", {}).get("username", None)
+                ],
+            }
+        else:
+            indexed = {
+                "by": [doc["user"]["username"]],
+                "retweeted_tweet_id": [doc["retweeted_tweet_id"]],
+                "retweeted_user": [doc.get("retweeted_user", {}).get("username", None)],
+            }
 
         for granularity, dt in rounded_times.items():
             indexed[f"created_{granularity}"] = [dt.isoformat()]
