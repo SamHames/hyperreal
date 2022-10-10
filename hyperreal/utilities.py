@@ -171,3 +171,14 @@ def long_distance_bigrams(items, max_window_size, include_items=None):
             bigrams.add((item_a, item_b, gap))
 
     return bigrams
+
+
+def round_datetime(datetime):
+
+    minute = datetime.replace(second=0, microsecond=0)
+    hour = minute.replace(minute=0)
+    day = hour.replace(hour=0)
+    month = day.replace(day=1)
+    year = month.replace(month=1)
+
+    return {"minute": minute, "hour": hour, "day": day, "month": month, "year": year}
