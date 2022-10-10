@@ -241,7 +241,7 @@ def twittersphere_corpus():
 @click.option(
     "--doc_batch_size",
     type=int,
-    default=DEFAULT_DOC_BATCH_SIZE * 100,
+    default=100000,
     help="The size of individual batches of documents sent for indexing. "
     "Larger sizes will require more ram, but might be more efficient for "
     "large collections.",
@@ -344,7 +344,7 @@ def model(
     if has_clusters:
         if restart:
             click.echo(
-                f"Restarting new feature cluster model with {clusters} on {index_db}."
+                f"Restarting new feature cluster model with {clusters} clusters on {index_db}."
             )
             doc_index.initialise_clusters(
                 n_clusters=clusters,
@@ -352,7 +352,9 @@ def model(
                 include_fields=include_field or None,
             )
     else:
-        click.echo(f"Creating new feature cluster model with {clusters} on {index_db}.")
+        click.echo(
+            f"Creating new feature cluster model with {clusters} clusters on {index_db}."
+        )
         doc_index.initialise_clusters(
             n_clusters=clusters,
             min_docs=min_docs,
