@@ -56,6 +56,8 @@ class Cluster:
 
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
+        rendered_docs = []
+        total_docs = 0
 
         if feature_id is not None:
             feature_id = int(feature_id)
@@ -64,7 +66,6 @@ class Cluster:
                 query, cluster_ids=[cluster_id], top_k=n_features
             )[0][-1]
 
-            rendered_docs = None
             if cherrypy.request.index.corpus is not None:
                 rendered_docs = cherrypy.request.index.render_docs(
                     query, random_sample_size=int(top_k)
