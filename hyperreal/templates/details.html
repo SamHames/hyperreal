@@ -49,19 +49,34 @@
                 </li>
                 <li>
                     <label for="iterations">Number of iterations to run:</label>
-                    <input id="iterations" type="number" value="10" />
+                    <input id="iterations" name="iterations" type="number" value="10" />
                 </li>
                 <li>
-                    <label for="min_docs">Minimum number of documents a feature needs to retrieve to be included in the model:</label>
-                    <input id="min_docs" type="number" value="10" />
+                    <label for="min-docs">Minimum number of documents a feature needs to retrieve to be included in the model:</label>
+                    <input id="min-docs" name="min_docs" type="number" value="10" />
                 </li>
                 <li>
                     <label for="clusters">Number of clusters in the model:</label>
-                    <input id="clusters" type="number" value="64" />
+                    <input id="clusters" name="clusters" type="number" value="64" />
                 </li>
             </ul>
         </fieldset>
         <button type="submit">Recreate Model</button>
+    </form>
+</details>
+
+<details>
+    <summary>Refine Existing Model</summary>
+    <form method="post" action="/index/{{ index_id }}/refine_model">
+        <fieldset>
+            <ul>
+                <li>
+                    <label for="iterations">Number of iterations to run:</label>
+                    <input id="iterations" name="iterations" type="number" value="10" />
+                </li>
+            </ul>
+        </fieldset>
+        <button type="submit">Refine Existing Model</button>
     </form>
 </details>
 

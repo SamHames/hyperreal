@@ -136,6 +136,11 @@ class Index:
         highlight_cluster_id = None
         highlight_feature_id = None
 
+        # Redirect to the index overview page to create a new model if no
+        # index has been created.
+        if not cherrypy.request.index.cluster_ids:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
+
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
             clusters = cherrypy.request.index.pivot_clusters_by_query(query)
@@ -219,9 +224,19 @@ class Index:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    def refine_model(self, index_id, iterations="10"):
-        """Run iterations of refinement on the model."""
-        pass
+    def refine_model(
+        self,
+        index_id,
+        iterations="10",
+    ):
+        """
+        Refine the existing model for the given number of iterations.
+
+        """
+
+        cherrypy.request.index.refine_clusters(iterations=int(iterations))
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 
 
 @cherrypy.popargs("index_id", handler=Index())
