@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Index Details{% endblock %}
+
+{% from 'macros.html' import render_cluster %}
+
+{% block nav %}<li><a href="/index/{{ index_id }}">Model Overview</a></li>{% endblock %}
+
+{% block content %}
+
+<section>
+    <h2>Summary of Indexed Fields</h2>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Field</th>
+                <th>Cardinality</th>
+                <th>Minimum Value</th>
+                <th>Maximum Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for field, granularity, min_value, max_value in field_summary %}
+            <tr>
+                <td>{{ field }}</td>
+                <td>{{ granularity }}</td>
+                <td>{{ min_value }}</td>
+                <td>{{ max_value }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <caption>Fields and value ranges present in this index.</caption>
+    </table>
+</section>
+
+<details>
+    <summary>Recreate Model</summary>
+    <form method="post" action="/index/{{ index_id }}/recreate_model">
+        <fieldset>
+            <ul>
+                <li>
+                    <label for="field_selection">Choose fields to include in the model:</label>
+                    <select name="include_fields" id="field_selection" multiple>
+                        {% for field, _, _, _ in field_summary %}
+                        <option value="{{ field }}">{{ field }}</option>
+                        {% endfor %}
+                    </select>
+                </li>
+                <li>
+                    <label for="iterations">Number of iterations to run:</label>
+                    <input id="iterations" name="iterations" type="number" value="10" />
+                </li>
+                <li>
+                    <label for="min-docs">Minimum number of documents a feature needs to retrieve to be included in the model:</label>
+                    <input id="min-docs" name="min_docs" type="number" value="10" />
+                </li>
+                <li>
+                    <label for="clusters">Number of clusters in the model:</label>
+                    <input id="clusters" name="clusters" type="number" value="64" />
+                </li>
+            </ul>
+        </fieldset>
+        <button type="submit">Recreate Model</button>
+    </form>
+</details>
+
+<details>
+    <summary>Refine Existing Model</summary>
+    <form method="post" action="/index/{{ index_id }}/refine_model">
+        <fieldset>
+            <ul>
+                <li>
+                    <label for="iterations">Number of iterations to run:</label>
+                    <input id="iterations" name="iterations" type="number" value="10" />
+                </li>
+            </ul>
+        </fieldset>
+        <button type="submit">Refine Existing Model</button>
+    </form>
+</details>
+
+{% endblock %}

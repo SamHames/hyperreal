@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}Feature Clustering{% endblock %}
-
 {% from 'macros.html' import render_cluster %}
 
-{% block nav %}<li><a href="/index/{{ index_id }}">Index overview</a></li>{% endblock %}
+{% block title %}Feature Clustering{% endblock %}
+
+{% block nav %}
+    <li><a href="/index/{{ index_id }}/details">Index Details</a></li>
+    <li><a href="/index/{{ index_id }}">Model Overview</a></li>
+{% endblock %}
 
 {% block content %}
 <details>
@@ -29,7 +32,7 @@
 
     {% for cluster_id, cluster_score, features in clusters[:1] %}
         <li>
-            {{ render_cluster(index_id, cluster_id, cluster_score, features, highlight_cluster_id, highlight_feature_id) }}
+            {{ render_cluster(index_id, cluster_id, features, cluster_score, highlight_cluster_id, highlight_feature_id) }}
         </li>
     {% endfor %}
 
@@ -46,7 +49,7 @@
 
     {% for cluster_id, cluster_score, features in clusters[1:] %}
     <li>
-        {{ render_cluster(index_id, cluster_id, cluster_score, features, highlight_cluster_id, highlight_feature_id) }}
+        {{ render_cluster(index_id, cluster_id, features, cluster_score, highlight_cluster_id, highlight_feature_id) }}
     </li>
     {% endfor %}
 </ul>
