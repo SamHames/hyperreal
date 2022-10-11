@@ -1,8 +1,14 @@
 {% extends "base.html" %}
 
+{% from 'macros.html' import render_cluster %}
+
 {% block title %}Cluster {{ cluster_id }}{% endblock %}
 
-{% block nav %}<li><a href="/index/{{ index_id }}">Index overview</a></li>{% endblock %}
+{% block nav %}
+    <li><a href="/index/{{ index_id }}/details">Index Details</a></li>
+    <li><a href="/index/{{ index_id }}">Model Overview</a></li>
+    <li><a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">Cluster Overview</a></li>
+{% endblock %}
 
 {% block content %}
 
@@ -21,17 +27,21 @@
     </form>
 </details>
 
-<ul class="compact-cluster">
-
-    {% for feature_id, field, value, score in features %}
+<ul class="cluster-list">
     <li>
-        <a class="feature-link" href="/index/{{ index_id }}/cluster/{{ cluster_id }}?feature_id={{ feature_id }}">
-            <div class="feature">
-                <span class="field">{{ field }}</span>
-                <span class="value">{{ value }}</span></div>
-        </a>
+        {{ render_cluster(index_id, cluster_id, features, highlight_feature_id=highlight_feature_id, context="cluster") }}
     </li>
-    {% endfor %}
+
+    {% if rendered_docs %}
+    <li>
+        <p>{% if rendered_docs|length < total_docs %}Sample of the {{ total_docs }} matching documents.{% else %}All {{ total_docs }} matching documents.{% endif %}</p>
+        <ul class="doc-list">
+            {% for doc_id, doc in rendered_docs %}
+            <li>{{ doc }}</li>
+            {% endfor %}
+        </ul>
+    </li>
+    {% endif %}
 
 </ul>
 

@@ -49,7 +49,7 @@ def ensure_list(**kwargs):
 
 class Cluster:
     @cherrypy.expose
-    def index(self, index_id, cluster_id, feature_id=None):
+    def index(self, index_id, cluster_id, feature_id=None, top_k=10):
         template = templates.get_template("cluster.html")
 
         cluster_id = int(cluster_id)
@@ -58,13 +58,28 @@ class Cluster:
         n_features = len(features)
 
         if feature_id is not None:
-            query = cherrypy.request.index[int(feature_id)]
+            feature_id = int(feature_id)
+            query = cherrypy.request.index[feature_id]
             features = cherrypy.request.index.pivot_clusters_by_query(
                 query, cluster_ids=[cluster_id], top_k=n_features
             )[0][-1]
 
+            rendered_docs = None
+            if cherrypy.request.index.corpus is not None:
+                rendered_docs = cherrypy.request.index.render_docs(
+                    query, random_sample_size=int(top_k)
+                )
+
+            total_docs = len(query)
+
         return template.render(
-            cluster_id=cluster_id, features=features, index_id=index_id
+            cluster_id=cluster_id,
+            highlight_feature_id=feature_id,
+            features=features,
+            index_id=index_id,
+            cluster_score=None,
+            rendered_docs=rendered_docs,
+            total_docs=total_docs,
         )
 
 
