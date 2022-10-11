@@ -612,6 +612,13 @@ class Index:
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_html(doc_keys)
 
+    def indexed_field_summary(self):
+        """
+        Return a summary tables of the indexed fields.
+
+        """
+        return list(self.db.execute("select * from field_summary"))
+
     @atomic(writes=True)
     def initialise_clusters(self, n_clusters, min_docs=1, include_fields=None):
         """

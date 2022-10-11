@@ -4,7 +4,10 @@
 
 {% from 'macros.html' import render_cluster %}
 
-{% block nav %}<li><a href="/index/{{ index_id }}">Index overview</a></li>{% endblock %}
+{% block nav %}
+    <li><a href="/index/{{ index_id }}">Model Overview</a></li>
+    <li><a href="/index/{{ index_id }}/details">Index Details</a></li>
+{% endblock %}
 
 {% block content %}
 <details>

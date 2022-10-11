@@ -6,21 +6,11 @@ import argparse
 import os
 from urllib.parse import parse_qsl
 
+import cherrypy
 from jinja2 import PackageLoader, Environment, select_autoescape
 
 import hyperreal.index
 import hyperreal.utilities
-
-
-templates = Environment(
-    loader=PackageLoader("hyperreal"), autoescape=select_autoescape()
-)
-
-
-import cherrypy
-from jinja2 import PackageLoader, Environment, select_autoescape
-
-from hyperreal import index
 
 
 templates = Environment(
@@ -184,6 +174,54 @@ class Index:
             highlight_feature_id=highlight_feature_id,
             highlight_cluster_id=highlight_cluster_id,
         )
+
+    @cherrypy.expose
+    def details(self, index_id):
+        """
+        Show the details of the index, including indexed fields and associated cardinalities.
+
+        """
+
+        template = templates.get_template("details.html")
+        field_summary = cherrypy.request.index.indexed_field_summary()
+
+        return template.render(
+            field_summary=field_summary,
+            index_id=index_id,
+        )
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    @cherrypy.tools.ensure_list(include_fields=str)
+    def recreate_model(
+        self,
+        index_id,
+        include_fields=None,
+        min_docs="10",
+        clusters="64",
+        iterations="10",
+    ):
+        """
+        (Re)Create the model for this index with the given parameters.
+
+        Note that this does not actually run any iterations of refinement.
+
+        """
+        cherrypy.request.index.initialise_clusters(
+            n_clusters=int(clusters),
+            min_docs=int(min_docs),
+            include_fields=include_fields or None,
+        )
+
+        cherrypy.request.index.refine_clusters(iterations=int(iterations))
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}")
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    def refine_model(self, index_id, iterations="10"):
+        """Run iterations of refinement on the model."""
+        pass
 
 
 @cherrypy.popargs("index_id", handler=Index())
