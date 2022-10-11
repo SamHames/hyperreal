@@ -879,8 +879,8 @@ class TwittersphereCorpus(SqliteBackedCorpus):
 
             indexed = {
                 "text": tokens,
-                "#": doc["hashtags"],
-                "@": doc["mentions"],
+                "#": {h.lower() for h in doc["hashtags"]},
+                "@": {m.lower() for m in doc["mentions"]},
                 "conversation_id": [doc["conversation_id"]],
                 "by": [doc["user"]["username"]],
                 "url": doc["external_urls"],
