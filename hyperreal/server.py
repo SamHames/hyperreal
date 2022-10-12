@@ -331,7 +331,13 @@ def launch_web_server(index_server, auto_reload=False):
     """Launch the web server using the given instance of an index server."""
 
     if not auto_reload:
-        cherrypy.config.update({"global": {"engine.autoreload.on": False}})
+        cherrypy.config.update(
+            {
+                "global": {
+                    "engine.autoreload.on": False,
+                }
+            }
+        )
 
     cherrypy.tree.mount(
         Root(),
@@ -358,6 +364,9 @@ def launch_web_server(index_server, auto_reload=False):
             }
         },
     )
+
+    cherrypy.log.access_log.propagate = False
+    cherrypy.log.error_log.propagate = False
 
     cherrypy.engine.signals.subscribe()
     cherrypy.engine.start()

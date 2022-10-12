@@ -10,6 +10,7 @@ from collections.abc import Sequence
 import concurrent.futures as cf
 from functools import wraps
 import heapq
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -18,10 +19,12 @@ import sqlite3
 import tempfile
 from typing import Any, Union, Hashable, Optional
 
-
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
 
 from hyperreal import db_utilities, corpus, _index_schema, utilities
+
+
+logger = logging.getLogger(__name__)
 
 
 class CorpusMissingError(AttributeError):
@@ -77,8 +80,8 @@ def atomic(writes=False):
         def wrapper(*args, **kwargs):
             self = args[0]
             try:
-                self.db.execute(f'savepoint "{func.__name__}"')
                 self._transaction_level += 1
+                self.db.execute(f'savepoint "{func.__name__}"')
 
                 results = func(*args, **kwargs)
 
@@ -88,6 +91,7 @@ def atomic(writes=False):
                 return results
 
             except Exception:
+                self.logger.exception("Error executing index method.")
                 # Rewind to the previous savepoint, then release it
                 # This is necessary to behave nicely whether we are operating
                 # inside a larger transaction or just in autocommit mode.
@@ -100,6 +104,7 @@ def atomic(writes=False):
                 # We've decremented to the final transaction level and are about
                 # to commit.
                 if self._transaction_level == 0 and self._changed:
+                    self.logger.info(f"Changes detected - updating clusters.")
                     # Note that this will check for changed queries, and will
                     # therefore be a noop if there aren't any.
                     self._update_changed_clusters()
@@ -161,6 +166,9 @@ class Index:
         # the last savepoint by committing a transaction.
         self._transaction_level = 0
         self._changed = False
+
+        # Set up a context specific adapter for this index.
+        self.logger = logging.LoggerAdapter(logger, {"index_db_path": self.db_path})
 
     @property
     def pool(self):
@@ -359,6 +367,8 @@ class Index:
             futures = set()
             to_merge = collections.defaultdict(list)
 
+            self.logger.info("Beginning indexing.")
+
             for doc_key in doc_keys:
 
                 self.db.execute("insert into doc_key values(?, ?)", doc_key)
@@ -367,6 +377,8 @@ class Index:
                 batch_size += 1
 
                 if batch_size >= doc_batch_size:
+                    self.logger.debug("Dispatching batch for indexing.")
+
                     # Dispatch the batch
                     futures.add(
                         self.pool.submit(
@@ -387,8 +399,14 @@ class Index:
                         done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
 
                         for f in done:
-                            segment_path, level = f.result()
-                            to_merge[level].append(segment_path)
+                            try:
+                                segment_path, level = f.result()
+                                to_merge[level].append(segment_path)
+                            except Exception:
+                                self.logger.exception(
+                                    "Caught indexing exception from background."
+                                )
+                                raise
 
                         # Note that there's an SQLite limit to how many db's
                         # we can attach at once, so we can't dispatch more than
@@ -403,10 +421,14 @@ class Index:
                                         *paths[:merge_batches],
                                     )
                                 )
+                                self.logger.debug(
+                                    f"Dispatching batches {paths[:merge_batches]}for merging."
+                                )
                                 to_merge[level] = paths[merge_batches:]
 
             # Dispatch the final batch.
             if batch_doc_keys:
+                self.logger.debug("Dispatching final batch for indexing.")
                 futures.add(
                     self.pool.submit(
                         _index_docs,
@@ -418,7 +440,8 @@ class Index:
                     )
                 )
 
-            print("Finalising indexing")
+            self.logger.info("Waiting for batches to complete.")
+
             # Finalise all segment indexing
             while futures:
                 done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
@@ -439,7 +462,7 @@ class Index:
                         )
                         to_merge[level] = paths[merge_batches:]
 
-            print("Index batches complete - performing final merges")
+            self.logger.info("Merging batches.")
             # The merge strategy is different now: if we are below merge_batches left, just go
             # straight to that, otherwise dispatch as many chunks as possible
             to_merge = [p for paths in to_merge.values() for p in paths]
@@ -464,6 +487,8 @@ class Index:
                     to_merge.append(f.result()[0])
 
             merge_file = to_merge[0]
+
+            self.logger.info("Finalising indexing.")
 
             # Now merge back to the original index, preserving feature_ids
             # if this is a reindex operation.
@@ -570,11 +595,14 @@ class Index:
             self.db.execute("commit")
 
         except Exception:
+            self.logger.exception("Indexing failure.")
             self.db.execute("rollback")
             raise
 
         finally:
             tempdir.cleanup()
+
+        self.logger.info("Indexing completed.")
 
     @atomic()
     def convert_query_to_keys(self, query):
@@ -681,12 +709,16 @@ class Index:
 
         self.db.execute("drop table include_field")
 
+        self.logger.info(f"Initialised new model with {n_clusters}.")
+
     @atomic(writes=True)
     def delete_clusters(self, cluster_ids):
         """Delete the specified clusters."""
         self.db.executemany(
             "delete from cluster where cluster_id = ?", [[c] for c in cluster_ids]
         )
+
+        self.logger.info(f"Deleted clusters {cluster_ids}.")
 
     @atomic(writes=True)
     def merge_clusters(self, cluster_ids):
@@ -700,6 +732,8 @@ class Index:
                 [merge_cluster_id, cluster_id],
             )
 
+        self.logger.info(f"Merged {cluster_ids} into {merge_cluster_id}.")
+
         return merge_cluster_id
 
     @atomic(writes=True)
@@ -709,6 +743,8 @@ class Index:
             "delete from feature_cluster where feature_id=?",
             [[f] for f in feature_ids],
         )
+
+        self.logger.info(f"Delete features {feature_ids}.")
 
     @atomic(writes=True)
     def create_cluster_from_features(self, feature_ids):
@@ -747,6 +783,8 @@ class Index:
             "update feature_cluster set cluster_id = ? where feature_id = ?",
             [(next_cluster_id, f) for f in feature_ids],
         )
+
+        self.logger.info(f"Created cluster {next_cluster_id} from {feature_ids}.")
 
         return next_cluster_id
 
@@ -928,7 +966,7 @@ class Index:
 
         for iteration in range(iterations):
 
-            print(iteration)
+            self.logger.info(f"Starting iteration {iteration + 1}/{iterations}")
 
             # We want a completely different order of feature checks on each
             # iteration. This randomised ordering is also used to break into
