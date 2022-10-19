@@ -22,7 +22,6 @@ setup(
     packages=find_packages("hyperreal"),
     url="https://github.com/SamHames/hyperreal/",
     license="Apache License 2.0",
-    classifiers=[],
     entry_points={
         "console_scripts": [
             "hyperreal = hyperreal.cli:cli",
