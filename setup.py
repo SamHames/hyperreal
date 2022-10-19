@@ -20,20 +20,24 @@ setup(
     use_scm_version=True,
     long_description=long_description,
     packages=find_packages("hyperreal"),
-    url="https://gitlab.com/SamHames/hyperreal/",
-    license="MIT",
+    url="https://github.com/SamHames/hyperreal/",
+    license="Apache License 2.0",
     classifiers=[],
     entry_points={
         "console_scripts": [
             "hyperreal = hyperreal.cli:cli",
         ]
     },
+    classifiers=[
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: Apache Software License",
+    ],
     keywords="",
     install_requires=requires,
     setup_requires=["setuptools_scm"],
     extras_require=extras,
     python_requires=">=3.9.0",
     author="Sam Hames",
-    author_email="s.hames@uq.edu.au",
-    description="Hyperreal is a library and tool for intepretive text analytics.",
+    description="Hyperreal is a library and tool for intepretive topic modelling.",
 )
