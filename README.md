@@ -17,7 +17,7 @@ Hyperreal can be installed using Pip from the command line (
 by running the following commands:
 
 ```
-python -m pip install git+https://github.com/SamHames/hyperreal.git@main
+python -m pip install hyperreal
 ```
 
 ## Usage
