@@ -1,12 +1,10 @@
-# This CITATION.cff file was generated with cffinit.
-# Visit https://bit.ly/cffinit to generate yours today!
-
 cff-version: 1.2.0
 title: 'Hyperreal: a tool for interpretive topic modelling'
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
 type: software
+doi: 10.5281/zenodo.7251335
 authors:
   - given-names: Samuel
     family-names: Hames
