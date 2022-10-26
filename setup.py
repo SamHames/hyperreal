@@ -19,6 +19,7 @@ setup(
     name="hyperreal",
     use_scm_version=True,
     long_description=long_description,
+    long_description_content_type="text/markdown",
     packages=find_packages("hyperreal"),
     url="https://github.com/SamHames/hyperreal/",
     license="Apache License 2.0",
