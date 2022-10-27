@@ -35,7 +35,7 @@ setup(
     ],
     keywords="",
     install_requires=requires,
-    include_package_data = True,
+    include_package_data=True,
     setup_requires=["setuptools_scm"],
     extras_require=extras,
     python_requires=">=3.9.0",
