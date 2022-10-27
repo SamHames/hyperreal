@@ -20,7 +20,7 @@ setup(
     use_scm_version=True,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages("hyperreal"),
+    packages=find_packages(),
     url="https://github.com/SamHames/hyperreal/",
     license="Apache License 2.0",
     entry_points={
@@ -35,6 +35,7 @@ setup(
     ],
     keywords="",
     install_requires=requires,
+    include_package_data = True,
     setup_requires=["setuptools_scm"],
     extras_require=extras,
     python_requires=">=3.9.0",
