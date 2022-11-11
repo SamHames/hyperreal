@@ -6,7 +6,7 @@ with open("./README.md", "r") as f:
 requires = [
     "click>=8.1.0",
     "jinja2>=3.1.0",
-    "pyroaring>=0.3.3",
+    "pyroaring>=0.3.4",
     "regex>=2022.4.24",
     "cherrypy>=18.6.0",
     "python-dateutil>=2.8.0",
