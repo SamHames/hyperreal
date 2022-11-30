@@ -49,7 +49,15 @@ def ensure_list(**kwargs):
 
 class Cluster:
     @cherrypy.expose
-    def index(self, index_id, cluster_id, feature_id=None, top_k=10):
+    def index(
+        self,
+        index_id,
+        cluster_id,
+        feature_id=None,
+        top_k_features="10",
+        exemplar_docs="10",
+        scoring="jaccard",
+    ):
         template = templates.get_template("cluster.html")
 
         cluster_id = int(cluster_id)
@@ -63,12 +71,15 @@ class Cluster:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
             features = cherrypy.request.index.pivot_clusters_by_query(
-                query, cluster_ids=[cluster_id], top_k=n_features
+                query,
+                cluster_ids=[cluster_id],
+                top_k=n_features,
+                scoring=scoring,
             )[0][-1]
 
             if cherrypy.request.index.corpus is not None:
                 rendered_docs = cherrypy.request.index.render_docs(
-                    query, random_sample_size=int(top_k)
+                    query, random_sample_size=int(exemplar_docs)
                 )
 
             total_docs = len(query)
@@ -144,7 +155,15 @@ class Index:
     feature = FeatureOverview()
 
     @cherrypy.expose
-    def index(self, index_id, feature_id=None, cluster_id=None, top_k="5"):
+    def index(
+        self,
+        index_id,
+        feature_id=None,
+        cluster_id=None,
+        exemplar_docs="5",
+        top_k_features="20",
+        scoring="jaccard",
+    ):
 
         template = templates.get_template("index.html")
 
@@ -159,11 +178,13 @@ class Index:
 
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
-            clusters = cherrypy.request.index.pivot_clusters_by_query(query)
+            clusters = cherrypy.request.index.pivot_clusters_by_query(
+                query, scoring=scoring, top_k=int(top_k_features)
+            )
 
             if cherrypy.request.index.corpus is not None:
                 rendered_docs = cherrypy.request.index.render_docs(
-                    query, random_sample_size=int(top_k)
+                    query, random_sample_size=int(exemplar_docs)
                 )
 
             total_docs = len(query)
@@ -171,17 +192,21 @@ class Index:
 
         elif cluster_id is not None:
             query, bitslice = cherrypy.request.index.cluster_query(int(cluster_id))
-            clusters = cherrypy.request.index.pivot_clusters_by_query(query)
+            clusters = cherrypy.request.index.pivot_clusters_by_query(
+                query, scoring=scoring, top_k=int(top_k_features)
+            )
 
             if cherrypy.request.index.corpus is not None:
-                ranked = hyperreal.utilities.bstm(query, bitslice, int(top_k))
+                ranked = hyperreal.utilities.bstm(query, bitslice, int(exemplar_docs))
                 rendered_docs = cherrypy.request.index.render_docs(ranked)
 
             total_docs = len(query)
             highlight_cluster_id = int(cluster_id)
 
         else:
-            clusters = cherrypy.request.index.top_cluster_features()
+            clusters = cherrypy.request.index.top_cluster_features(
+                top_k=int(top_k_features)
+            )
             total_docs = 0
 
         return template.render(

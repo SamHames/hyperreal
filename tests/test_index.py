@@ -232,15 +232,18 @@ def test_pivoting(example_index_path):
 
     # Test early/late truncation in each direction with large and small
     # features.
-    for query in [("text", "the"), ("text", "denied")]:
-        pivoted = index.pivot_clusters_by_query(index[query], top_k=2)
-        for cluster_id, weight, features in pivoted:
-            # This feature should be first in the cluster, but the cluster
-            # containing it may not always be first.
-            if query == features[0][1:3]:
-                break
-        else:
-            assert False
+    for scoring in ("jaccard", "chi_squared"):
+        for query in [("text", "the"), ("text", "denied")]:
+            pivoted = index.pivot_clusters_by_query(
+                index[query], top_k=2, scoring=scoring
+            )
+            for cluster_id, weight, features in pivoted:
+                # This feature should be first in the cluster, but the cluster
+                # containing it may not always be first.
+                if query == features[0][1:3]:
+                    break
+            else:
+                assert False
 
 
 def test_create_new_features(example_index_corpora_path):
