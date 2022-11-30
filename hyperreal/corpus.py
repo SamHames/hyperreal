@@ -709,6 +709,28 @@ class TwittersphereCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "TwittersphereCorpus"
 
+    def __init__(self, db_path):
+
+        super().__init__(db_path)
+
+        version_rows = list(
+            self.db.execute(
+                "select value from metadata where key = 'twittersphere_schema_version'"
+            )
+        )
+
+        if not version_rows:
+            raise ValueError(
+                "This does not appear to be a Twittersphere generated database."
+            )
+
+        elif version_rows[0]["value"] < 15:
+            raise ValueError(
+                "The database needs to have a schema version of 15 or later. "
+                "You will need to regenerate the database with a newer "
+                "version of twittersphere to use this tool."
+            )
+
     def docs(self, doc_keys=None):
         self.db.execute("savepoint docs")
 
@@ -731,6 +753,23 @@ class TwittersphereCorpus(SqliteBackedCorpus):
                         [tweet_id],
                     )
                 )[0]
+
+                # Augment the doc with the specific collection context in which this tweet was
+                # directly collected. Since this might be multiple contexts this is a set.
+                doc["collection_labels"] = {
+                    r["label"]
+                    for r in self.db.execute(
+                        """
+                    select
+                        collection_context.label
+                    from tweet_at_time
+                    inner join collection_context using(context_id)
+                    where tweet_id = ?
+                        and directly_collected = 1
+                    """,
+                        [tweet_id],
+                    )
+                }
 
                 doc["hashtags"] = {
                     r["tag"]
@@ -891,6 +930,7 @@ class TwittersphereCorpus(SqliteBackedCorpus):
                 "replied_to_user": [
                     doc.get("replied_to_user", {}).get("username", None)
                 ],
+                "collection_label": doc["collection_labels"],
             }
         else:
             indexed = {
