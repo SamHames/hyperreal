@@ -109,7 +109,7 @@ for cluster_id in i.cluster_ids:
 
 # Perform a boolean query on the corpus, looking for documents that contain
 # both apples AND oranges in the text field.
-q = i[('text', 'oranges')] & i[('text', 'oranges')]
+q = i[('text', 'apples')] & i[('text', 'oranges')]
 # Lookup all of the documents in the corpus that match this query.
 docs = i.get_docs(q)
 
