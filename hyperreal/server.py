@@ -2,7 +2,8 @@
 Cherrypy based webserver for serving an index (or in future) a set of indexes.
 
 """
-import argparse
+import csv
+import io
 import os
 from urllib.parse import parse_qsl
 
@@ -237,6 +238,31 @@ class Index:
             field_summary=field_summary,
             index_id=index_id,
         )
+
+    @cherrypy.expose
+    def export_clusters(self, index_id):
+        """
+        Export a spreadsheet of the model information, including features and cluster assignments.
+
+        """
+
+        cherrypy.response.headers["Content-Type"] = "text/csv"
+        cherrypy.response.headers[
+            "Content-Disposition"
+        ] = 'attachment; filename="feature_clusters.csv"'
+        all_features = cherrypy.request.index.top_cluster_features(top_k=2**62)
+
+        output = io.StringIO()
+        writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
+        writer.writerow(("cluster_id", "feature_id", "field", "value", "docs_count"))
+
+        for cluster_id, _, cluster_features in all_features:
+            for row in cluster_features:
+                writer.writerow([cluster_id, *row])
+
+        output.seek(0)
+
+        return cherrypy.lib.file_generator(output)
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
