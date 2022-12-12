@@ -198,7 +198,9 @@ class Index:
 
             if cherrypy.request.index.corpus is not None:
                 ranked = hyperreal.utilities.bstm(query, bitslice, int(exemplar_docs))
-                rendered_docs = cherrypy.request.index.render_docs(ranked)
+                rendered_docs = cherrypy.request.index.render_docs(
+                    ranked, random_sample_size=int(exemplar_docs)
+                )
 
             total_docs = len(query)
             highlight_cluster_id = int(cluster_id)
