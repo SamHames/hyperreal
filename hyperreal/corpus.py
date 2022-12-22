@@ -138,6 +138,18 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
 
+    def __init__(self, db_path, tokeniser=utilities.tokens):
+
+        super().__init__(db_path)
+
+        self.tokeniser = tokeniser
+
+    def __getstate__(self):
+        return self.db_path, self.tokeniser
+
+    def __setstate__(self, state):
+        self.__init__(state[0], tokeniser=state[1])
+
     def replace_docs(self, texts):
         """Replace the existing documents with texts."""
         self.db.execute("pragma journal_mode=WAL")
@@ -182,7 +194,7 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     def index(self, doc):
         return {
-            "text": utilities.tokens(doc["text"]),
+            "text": self.tokeniser(doc["text"]),
         }
 
     def render_docs_html(self, doc_keys):

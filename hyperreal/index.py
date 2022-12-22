@@ -660,8 +660,9 @@ class Index:
 
         """
 
-        # Note - foreign key constraints handle all of the associated
-        # metadata.
+        # Note - foreign key constraints handle most of the associated metadata,
+        # we just do one extra step to avoid a circular trigger
+        self.db.execute("delete from feature_cluster")
         self.db.execute("delete from cluster")
 
         self.db.execute("create temporary table if not exists include_field(field)")
@@ -714,8 +715,10 @@ class Index:
     @atomic(writes=True)
     def delete_clusters(self, cluster_ids):
         """Delete the specified clusters."""
+        # The cluster table will be automatically updated by the housekeeping functionality
         self.db.executemany(
-            "delete from cluster where cluster_id = ?", [[c] for c in cluster_ids]
+            "delete from feature_cluster where cluster_id = ?",
+            [[c] for c in cluster_ids],
         )
 
         self.logger.info(f"Deleted clusters {cluster_ids}.")
@@ -1195,7 +1198,21 @@ class Index:
 
         """
 
+        # First update the feature counts, and remove empty clusters
+        self.db.execute(
+            """
+            update cluster set feature_count = (
+                select count(*) 
+                from feature_cluster fc
+                where fc.cluster_id=cluster.cluster_id
+            )
+            where cluster_id in (select cluster_id from changed_cluster)
+            """
+        )
+
         changed = self.db.execute("select cluster_id from changed_cluster")
+
+        # Then update the union statistics for all of the clusters
         bg_args = (
             (
                 self.db_path,
@@ -1227,6 +1244,7 @@ class Index:
                 (len(query), weight, query, cluster_id),
             )
 
+        self.db.execute("delete from cluster where feature_count = 0")
         self.db.execute("delete from changed_cluster")
 
 
