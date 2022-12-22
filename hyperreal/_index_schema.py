@@ -14,7 +14,7 @@ database, associated with CURRENT_SCHEMA_VERSION.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 CURRENT_SCHEMA = f"""
     create table if not exists doc_key (
@@ -82,60 +82,56 @@ CURRENT_SCHEMA = f"""
 
     --------
     -- Used to track when clusters have changed, to mark that housekeeping
-    -- functions need to run.
+    -- functions need to run. Previously a more complex set of triggers was used,
+    -- but that leads to performance issues on models with large numbers of
+    -- features as triggers are only executed per row in sqlite.
     create table if not exists changed_cluster (
         cluster_id integer primary key references cluster on delete cascade
     );
 
     --------
-    create trigger if not exists mark_cluster_changed after update of feature_count on cluster
-        begin
-            insert or ignore into changed_cluster values(new.cluster_id);
-        end;
+    -- Cleanup old triggers if they're still around - these are now updated in
+    -- the application layer
+    drop trigger if exists mark_cluster_changed;
+    --------
+    drop trigger if exists ensure_cluster;
+    --------
+    drop trigger if exists delete_feature_cluster;
+    --------
+    drop trigger if exists ensure_cluster_update;
+    --------
+    drop trigger if exists update_cluster_feature_counts;
 
     --------
-    -- These triggers make sure that the cluster table always demonstrates
-    -- which clusters are currently active, and allows the creation of tracking
-    -- metadata for new clusters on insert of the features.
-    create trigger if not exists ensure_cluster before insert on feature_cluster
+    create trigger if not exists insert_feature_checks before insert on feature_cluster
         begin
+            -- Make sure the cluster exists in the tracking table for foreign key relationships
             insert or ignore into cluster(cluster_id) values (new.cluster_id);
-            update cluster set
-                feature_count = feature_count + 1
-            where cluster_id = new.cluster_id;
+            -- Make sure that the new cluster is marked as changed so it can be summarised
+            insert or ignore into changed_cluster(cluster_id) values (new.cluster_id);
         end;
 
     --------
-    create trigger if not exists delete_feature_cluster after delete on feature_cluster
-        begin
-            update cluster set
-                feature_count = feature_count - 1
-            where cluster_id = old.cluster_id;
-            delete from cluster
-            where cluster_id = old.cluster_id
-                and feature_count = 0;
-        end;
-
-    --------
-    create trigger if not exists ensure_cluster_update before update on feature_cluster
+    create trigger if not exists update_feature_checks before update on feature_cluster
         when old.cluster_id != new.cluster_id
         begin
+            -- Make sure the new cluster exists in the tracking table for foreign
+            -- key relationships
             insert or ignore into cluster(cluster_id) values (new.cluster_id);
+
+            -- Make sure that the new and old clusters are marked as changed
+            -- so it can be summarised
+            insert or ignore into changed_cluster(cluster_id) 
+                values (new.cluster_id), (old.cluster_id);
         end;
 
     --------
-    create trigger if not exists update_cluster_feature_counts after update on feature_cluster
-        when old.cluster_id != new.cluster_id
+    create trigger if not exists delete_feature_checks before delete on feature_cluster
         begin
-            update cluster set
-                feature_count = feature_count + 1
-            where cluster_id = new.cluster_id;
-            update cluster set
-                feature_count = feature_count - 1
-            where cluster_id = old.cluster_id;
-            delete from cluster
-            where cluster_id = old.cluster_id
-                and feature_count = 0;
+            -- Make sure that the new and old clusters are marked as changed
+            -- so it can be summarised
+            insert or ignore into changed_cluster(cluster_id) 
+                values (old.cluster_id);
         end;
 
     --------
@@ -156,6 +152,7 @@ migrations = {
         ],
     ),
     5: ([], []),
+    6: ([], []),
 }
 
 
@@ -205,17 +202,23 @@ def migrate(db):
 
         db.execute("begin")
 
+        m = sorted(migrations.items())
+
         # Run premigration steps
-        for statement in migrations[db_version][0]:
-            db.execute(statement)
+        for version, migration in m:
+            if version >= db_version:
+                for statement in migration[0]:
+                    db.execute(statement)
 
         # Run the schema script
         for statement in CURRENT_SCHEMA.split("--------"):
             db.execute(statement)
 
         # Run postmigration steps
-        for statement in migrations[db_version][1]:
-            db.execute(statement)
+        for version, migration in m:
+            if version >= db_version:
+                for statement in migration[1]:
+                    db.execute(statement)
 
         db.execute("commit")
 
