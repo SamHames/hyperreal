@@ -1115,18 +1115,51 @@ class Index:
 
         return cluster_feature
 
-    def propose_cluster_split(
+    @atomic()
+    def split_cluster(
         self,
-        cluster_id,
+        cluster_id: int,
         k: Optional[int] = None,
         iterations: int = 10,
         sub_iterations: int = 2,
         group_test: bool = True,
     ):
-        """Compute a proposed split of the given cluster.
+        """
+        Split the given cluster up into k groups.
+
+        `iterations` worth of refinements will be running using the standard algorithm.
+
+        """
+
+        split_features = self.propose_cluster_split(
+            cluster_id,
+            k=k,
+            iterations=iterations,
+            sub_iterations=sub_iterations,
+            group_test=group_test,
+        )
+
+        for feature_cluster in split_features:
+            self.create_cluster_from_features(feature_cluster)
+
+    @atomic()
+    def propose_cluster_split(
+        self,
+        cluster_id: int,
+        k: Optional[int] = None,
+        iterations: int = 10,
+        sub_iterations: int = 2,
+        group_test: bool = True,
+    ):
+        """
+        Compute a proposed split of the given cluster.
 
         k specifies the number of a splits, if left at the default of None, it
         will be automatically split as the sqrt(number of features).
+
+        Returns a list of clusters of features representing the split. To
+        actually save the feature you will need to call
+        `create_cluster_from_features` on each group.
 
         """
         cluster_features = self.cluster_features(cluster_id)
@@ -1137,11 +1170,13 @@ class Index:
 
         split_cluster_features = {i: set(feature_ids[i::k]) for i in range(k)}
 
-        return self._refine_feature_groups(
-            split_cluster_features, iterations, sub_iterations, group_test
+        return list(
+            self._refine_feature_groups(
+                split_cluster_features, iterations, sub_iterations, group_test
+            ).values()
         )
 
-    @atomic(writes=True)
+    @atomic()
     def refine_clusters(
         self,
         iterations: int = 10,
@@ -1182,6 +1217,18 @@ class Index:
         )
 
         # Serialise the actual results of the clustering!
+        self._update_cluster_feature(cluster_feature)
+
+    @atomic(writes=True)
+    def _update_cluster_feature(self, cluster_feature):
+        """
+        Update the given cluster: feature mapping.
+
+        Note that this only updates the provided clusters: it does not replace
+        the entire state of the model. Also note that this can clobber
+        cluster_ids if you're not careful.
+
+        """
         self.db.executemany(
             """
             update feature_cluster set cluster_id = ?1 where feature_id = ?2

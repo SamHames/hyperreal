@@ -289,3 +289,18 @@ def test_fixed_seed(example_index_path, n_clusters):
 
     assert clustering_1 == clustering_2
     assert split_1 == split_2
+
+
+def test_splitting(example_index_path):
+    """Test splitting and saving splits works correctly"""
+    index = hyperreal.index.Index(example_index_path)
+
+    n_clusters = 16
+    index.initialise_clusters(n_clusters)
+
+    assert len(index.cluster_ids) == n_clusters
+
+    for cluster_id in index.cluster_ids:
+        index.split_cluster(cluster_id, k=2, iterations=1)
+
+    assert len(index.cluster_ids) == n_clusters * 2
