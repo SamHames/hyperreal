@@ -65,7 +65,7 @@ def atomic(writes=False):
     """
     Wrap the decorated interaction with SQLite in a transaction or savepoint.
 
-    Uses savepoints - if no encloding transaction is present, this will create
+    Uses savepoints - if no enclosing transaction is present, this will create
     one, if a transaction is in progress, this will be nested as a non durable
     savepoint within that transaction.
 
@@ -793,7 +793,12 @@ class Index:
 
     @property
     def cluster_ids(self):
-        return [r[0] for r in self.db.execute("select cluster_id from cluster")]
+        return [
+            r[0]
+            for r in self.db.execute(
+                "select cluster_id from cluster order by cluster_id"
+            )
+        ]
 
     @atomic()
     def top_cluster_features(self, top_k=20):

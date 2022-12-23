@@ -63,6 +63,20 @@ class Cluster:
 
         cluster_id = int(cluster_id)
 
+        # Work out
+        other_clusters = cherrypy.request.index.cluster_ids
+
+        try:
+            cluster_index = other_clusters.index(cluster_id)
+        except ValueError:
+            raise cherrypy.HTTPError(404)
+
+        # If we're at the start/end, wrap around to the end/start.
+        prev_cluster_id = other_clusters[cluster_index - 1]
+        next_cluster_id = other_clusters[
+            (cluster_index + 1) if cluster_index < (len(other_clusters) - 1) else 0
+        ]
+
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
         rendered_docs = []
@@ -93,6 +107,8 @@ class Cluster:
             cluster_score=None,
             rendered_docs=rendered_docs,
             total_docs=total_docs,
+            prev_cluster_id=prev_cluster_id,
+            next_cluster_id=next_cluster_id,
         )
 
 
