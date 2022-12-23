@@ -146,6 +146,16 @@ class ClusterOverview:
         )
         raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{merge_cluster_id}")
 
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    def split(self, index_id, cluster_id, k, iterations):
+
+        new_cluster_ids = cherrypy.request.index.split_cluster(
+            int(cluster_id), k=int(k), iterations=int(iterations)
+        )
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{new_cluster_ids[0]}")
+
 
 class FeatureOverview:
     @cherrypy.expose

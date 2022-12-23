@@ -1139,8 +1139,12 @@ class Index:
             group_test=group_test,
         )
 
+        new_cluster_ids = []
         for feature_cluster in split_features:
-            self.create_cluster_from_features(feature_cluster)
+            new_cluster_id = self.create_cluster_from_features(feature_cluster)
+            new_cluster_ids.append(new_cluster_id)
+
+        return new_cluster_ids
 
     @atomic()
     def propose_cluster_split(
