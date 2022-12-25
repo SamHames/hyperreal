@@ -1139,12 +1139,19 @@ class Index:
             group_test=group_test,
         )
 
-        new_cluster_ids = []
-        for feature_cluster in split_features:
-            new_cluster_id = self.create_cluster_from_features(feature_cluster)
-            new_cluster_ids.append(new_cluster_id)
+        # Note that the batch with the most features is left in place at the
+        # original cluster_id - this is a convenience for browsing split
+        # clusters, and allows redirecting back to most of the original
+        # cluster in the web view.
+        split_features.sort(reverse=True, key=lambda x: len(x))
 
-        return new_cluster_ids
+        assigned_cluster_ids = [cluster_id]
+
+        for feature_cluster in split_features[1:]:
+            new_cluster_id = self.create_cluster_from_features(feature_cluster)
+            assigned_cluster_ids.append(new_cluster_id)
+
+        return assigned_cluster_ids
 
     @atomic()
     def propose_cluster_split(
