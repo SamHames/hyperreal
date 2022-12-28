@@ -74,6 +74,10 @@
                     <label for="iterations">Number of iterations to run:</label>
                     <input id="iterations" name="iterations" type="number" value="10" />
                 </li>
+                <li>
+                    <label for="target_clusters">Target number of clusters (current model contains {{ current_clusters }}):</label>
+                    <input id="target_clusters" name="target_clusters" type="number" value="{{ current_clusters }}" />
+                </li>
             </ul>
         </fieldset>
         <button type="submit">Refine Existing Model</button>

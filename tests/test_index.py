@@ -304,3 +304,17 @@ def test_splitting(example_index_path):
         index.split_cluster(cluster_id, k=2, iterations=1)
 
     assert len(index.cluster_ids) == n_clusters * 2
+
+
+def test_filling_empty_clusters(example_index_path):
+    """Test expanding the number of clusters by subdividing the largest."""
+    index = hyperreal.index.Index(example_index_path)
+
+    n_clusters = 8
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=3)
+    assert len(index.cluster_ids) == n_clusters
+
+    index.refine_clusters(iterations=3, target_clusters=12)
+
+    assert len(index.cluster_ids) == 12

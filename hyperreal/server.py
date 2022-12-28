@@ -258,11 +258,13 @@ class Index:
         """
 
         template = templates.get_template("details.html")
+        current_clusters = len(cherrypy.request.index.cluster_ids)
         field_summary = cherrypy.request.index.indexed_field_summary()
 
         return template.render(
             field_summary=field_summary,
             index_id=index_id,
+            current_clusters=current_clusters,
         )
 
     @cherrypy.expose
@@ -319,17 +321,14 @@ class Index:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    def refine_model(
-        self,
-        index_id,
-        iterations="10",
-    ):
+    def refine_model(self, index_id, iterations="10", target_clusters="0"):
         """
         Refine the existing model for the given number of iterations.
 
         """
-
-        cherrypy.request.index.refine_clusters(iterations=int(iterations))
+        cherrypy.request.index.refine_clusters(
+            iterations=int(iterations), target_clusters=int(target_clusters) or None
+        )
 
         raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 

@@ -749,6 +749,20 @@ class Index:
 
         self.logger.info(f"Delete features {feature_ids}.")
 
+    def next_cluster_id(self):
+        """Returns a new cluster_id, guaranteed to be higher than anything already assigned."""
+        next_cluster_id = list(
+            self.db.execute(
+                """
+                select
+                    coalesce(max(cluster_id), 0) + 1
+                from cluster
+                """
+            )
+        )[0][0]
+
+        return next_cluster_id
+
     @atomic(writes=True)
     def create_cluster_from_features(self, feature_ids):
         """
@@ -758,15 +772,7 @@ class Index:
 
         """
 
-        next_cluster_id = list(
-            self.db.execute(
-                """
-            select
-                coalesce(max(cluster_id), 0) + 1
-            from cluster
-            """
-            )
-        )[0][0]
+        next_cluster_id = self.next_cluster_id()
 
         self.db.executemany(
             """
@@ -974,6 +980,7 @@ class Index:
         iterations: int = 10,
         sub_iterations: int = 2,
         group_test: bool = False,
+        minimum_cluster_size: int = 1,
     ):
         """
         Low level function for iteratively refining a feature clustering.
@@ -982,6 +989,10 @@ class Index:
 
         This is most useful if you want to explore specific clustering
         approaches without the constraint of the saved clusters.
+
+        To expand the number of clusters in a model, empty cluster_ids can be
+        provided and will be used for additional clusters made by splitting
+        the largest clusters up.
 
         """
 
@@ -999,10 +1010,9 @@ class Index:
 
         features = list(feature_cluster)
 
-        # Prune empty clusters.
-        cluster_ids = [
-            cluster_id for cluster_id, features in cluster_feature.items() if features
-        ]
+        # Use initial cluster ids to keep track of whether any clusters
+        # are fully emptied out and can be used to split larger clusters up.
+        assigned_cluster_ids = set(cluster_feature)
         total_objective = 0
 
         available_workers = self.pool._max_workers
@@ -1019,6 +1029,40 @@ class Index:
             # More subiterations --> Less perturbation of the model for each
             # set of features, at the cost of more time for each subiteration.
             for sub_iter in range(sub_iterations):
+
+                # Current cluster_ids above the minimum size
+                # Note that this will dissolve clusters below the minimum size!
+                current_cluster_ids = {
+                    cluster_id
+                    for cluster_id, values in cluster_feature.items()
+                    if len(values) >= minimum_cluster_size
+                }
+
+                empty_cluster_ids = assigned_cluster_ids - current_cluster_ids
+
+                if empty_cluster_ids:
+                    logger.info(
+                        f"Splitting the largest clusters to fill {len(empty_cluster_ids)} empty clusters."
+                    )
+                    largest_clusters = sorted(
+                        cluster_feature.items(),
+                        key=lambda x: (len(x[1]), self.random.random()),
+                    )[-len(empty_cluster_ids) :]
+
+                    for empty_id, (split_id, split_features) in zip(
+                        empty_cluster_ids, largest_clusters
+                    ):
+                        to_split = list(split_features)
+                        self.random.shuffle(to_split)
+
+                        # Reassign the split features to the empty cluster,
+                        # removing them from the old cluster too.
+                        for feature in to_split[::2]:
+                            cluster_feature[split_id].discard(feature)
+                            cluster_feature[empty_id].add(feature)
+                            feature_cluster[feature] = empty_id
+
+                cluster_ids = list(cluster_feature.keys())
 
                 futures: set[cf.Future] = set()
                 # This approach ensures that each subiteration is of
@@ -1098,13 +1142,6 @@ class Index:
                     cluster_feature[feature_cluster[feature]].discard(feature)
                     cluster_feature[cluster_id].add(feature)
                     feature_cluster[feature] = cluster_id
-
-                # Prune emptied clusters from ids
-                cluster_ids = [
-                    cluster_id
-                    for cluster_id, values in cluster_feature.items()
-                    if len(values)
-                ]
 
         # prune empty clusters before returning
         cluster_feature = {
@@ -1192,9 +1229,13 @@ class Index:
         self,
         iterations: int = 10,
         sub_iterations: int = 2,
+        target_clusters: Optional[int] = None,
     ):
         """
         Attempt to improve the model clustering of the features for `iterations`.
+
+        If target_clusters is larger than the current number of clusters in the model,
+        the largest clusters by number of features will be split to reach the target.
 
         """
 
@@ -1219,6 +1260,18 @@ class Index:
             """
         ):
             cluster_feature[cluster_id].add(feature_id)
+
+        target_clusters = target_clusters or len(cluster_feature)
+        n_empty_required = target_clusters - len(cluster_feature)
+
+        if n_empty_required > 0:
+
+            next_cluster_id = self.next_cluster_id()
+
+            for i in range(n_empty_required):
+                cluster_feature[next_cluster_id + i] = set()
+
+            print(cluster_feature)
 
         cluster_feature = self._refine_feature_groups(
             cluster_feature,
