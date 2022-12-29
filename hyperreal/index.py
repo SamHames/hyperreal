@@ -1044,20 +1044,22 @@ class Index:
                     logger.info(
                         f"Splitting the largest clusters to fill {len(empty_cluster_ids)} empty clusters."
                     )
-                    largest_clusters = sorted(
-                        cluster_feature.items(),
-                        key=lambda x: (len(x[1]), self.random.random()),
-                    )[-len(empty_cluster_ids) :]
 
-                    for empty_id, (split_id, split_features) in zip(
-                        empty_cluster_ids, largest_clusters
-                    ):
-                        to_split = list(split_features)
-                        self.random.shuffle(to_split)
+                    # The logic here is to: split the largest cluster recursively until
+                    # we have enough clusters.
+                    while empty_cluster_ids:
+                        # Split the biggest cluster in two.
+                        n_features, split_id = max(
+                            (
+                                (len(c_features), cluster_id)
+                                for cluster_id, c_features in cluster_feature.items()
+                            )
+                        )
 
-                        # Reassign the split features to the empty cluster,
-                        # removing them from the old cluster too.
-                        for feature in to_split[::2]:
+                        to_split = list(cluster_feature[split_id])
+
+                        empty_id = empty_cluster_ids.pop()
+                        for feature in self.random.sample(to_split, n_features // 2):
                             cluster_feature[split_id].discard(feature)
                             cluster_feature[empty_id].add(feature)
                             feature_cluster[feature] = empty_id
@@ -1270,8 +1272,6 @@ class Index:
 
             for i in range(n_empty_required):
                 cluster_feature[next_cluster_id + i] = set()
-
-            print(cluster_feature)
 
         cluster_feature = self._refine_feature_groups(
             cluster_feature,
