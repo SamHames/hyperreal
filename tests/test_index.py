@@ -276,6 +276,8 @@ def test_fixed_seed(example_index_path, n_clusters):
 
     clustering_1 = index.top_cluster_features()
     split_1 = index.propose_cluster_split(1, iterations=1)
+    index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
+    refined_clustering_1 = index.top_cluster_features()
 
     # Note we need to initialise a new object with the random seed, otherwise
     # as each random operation consumes items from the stream.
@@ -286,8 +288,11 @@ def test_fixed_seed(example_index_path, n_clusters):
 
     clustering_2 = index.top_cluster_features()
     split_2 = index.propose_cluster_split(1, iterations=1)
+    index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
+    refined_clustering_2 = index.top_cluster_features()
 
     assert clustering_1 == clustering_2
+    assert refined_clustering_1 == refined_clustering_2
     assert split_1 == split_2
 
 
@@ -318,3 +323,32 @@ def test_filling_empty_clusters(example_index_path):
     index.refine_clusters(iterations=3, target_clusters=12)
 
     assert len(index.cluster_ids) == 12
+
+
+def test_pinning_features(example_index_path):
+    """Test expanding the number of clusters by subdividing the largest."""
+    index = hyperreal.index.Index(example_index_path)
+
+    n_clusters = 8
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=1)
+    assert len(index.cluster_ids) == n_clusters
+
+    # Get two features from the first cluster to pin.
+    pinned_features = [f[0] for f in index.cluster_features(1, top_k=2)]
+    index.pin_features(feature_ids=pinned_features)
+
+    # Refine and split at the same time to confirm that splitting also doesn't move pinned features
+    index.refine_clusters(iterations=3, target_clusters=12)
+
+    whole_cluster = {f[0] for f in index.cluster_features(1)}
+    for feature_id in pinned_features:
+        assert feature_id in whole_cluster
+
+    assert len(index.cluster_ids) == 12
+
+    # Now pin a whole cluster
+    index.pin_clusters(cluster_ids=[1])
+    index.refine_clusters(iterations=3, target_clusters=16)
+
+    assert whole_cluster == {f[0] for f in index.cluster_features(1)}

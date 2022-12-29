@@ -6,7 +6,7 @@ to document keys.
 
 import array
 import collections
-from collections.abc import Sequence
+from collections.abc import Sequence, Iterable
 import concurrent.futures as cf
 from functools import wraps
 import heapq
@@ -797,6 +797,36 @@ class Index:
 
         return next_cluster_id
 
+    @atomic(writes=True)
+    def pin_features(self, feature_ids: Sequence[int], pinned: bool = True):
+        """
+        Pin (or unpin) the given features.
+
+        Pinning a feature prevents it from being moved during the clustering
+        feature. This can be used to preserve interesting combinations of
+        features together in the same cluster.
+
+        """
+
+        self.db.executemany(
+            "update feature_cluster set pinned = ? where feature_id = ?",
+            ((pinned, f) for f in feature_ids),
+        )
+
+    @atomic(writes=True)
+    def pin_clusters(self, cluster_ids: Sequence[int], pinned: bool = True):
+        """
+        Pin (or unpin) the given clusters.
+
+        A pinned cluster will not be modified by the automated clustering
+        routine. This can be used to preserve useful clusters and allow
+        remaining unpinned clusters to be refined further.
+        """
+        self.db.executemany(
+            "update cluster set pinned = ? where cluster_id = ?",
+            ((pinned, c) for c in cluster_ids),
+        )
+
     @property
     def cluster_ids(self):
         return [
@@ -981,6 +1011,7 @@ class Index:
         sub_iterations: int = 2,
         group_test: bool = False,
         minimum_cluster_size: int = 1,
+        pinned_features: Optional[Iterable] = None,
     ):
         """
         Low level function for iteratively refining a feature clustering.
@@ -993,6 +1024,8 @@ class Index:
         To expand the number of clusters in a model, empty cluster_ids can be
         provided and will be used for additional clusters made by splitting
         the largest clusters up.
+
+        Pinned features will not be considered as candidates for moving.
 
         """
 
@@ -1008,7 +1041,11 @@ class Index:
             for cluster_id, features in cluster_feature.items()
         }
 
-        features = list(feature_cluster)
+        pinned_features = set(pinned_features) if pinned_features else set()
+        # Remove pinned feature from the active feature list - the pinned
+        # features will still contribute to the cluster, they just won't be
+        # candidates for moving around.
+        features = [f for f in feature_cluster if f not in pinned_features]
 
         # Use initial cluster ids to keep track of whether any clusters
         # are fully emptied out and can be used to split larger clusters up.
@@ -1038,31 +1075,48 @@ class Index:
                     if len(values) >= minimum_cluster_size
                 }
 
-                empty_cluster_ids = assigned_cluster_ids - current_cluster_ids
+                too_small_cluster_ids = assigned_cluster_ids - current_cluster_ids
 
-                if empty_cluster_ids:
+                # Actually dissolve the clusters from the model.
+                # Feature_cluster will be updated after running the iteration.
+                for cluster_id in too_small_cluster_ids:
+                    cluster_feature[cluster_id] = set()
+
+                if too_small_cluster_ids:
                     logger.info(
-                        f"Splitting the largest clusters to fill {len(empty_cluster_ids)} empty clusters."
+                        f"Dissolving {len(too_small_cluster_ids)} too-small clusters."
                     )
 
-                    # The logic here is to: split the largest cluster recursively until
-                    # we have enough clusters.
-                    while empty_cluster_ids:
-                        # Split the biggest cluster in two.
-                        n_features, split_id = max(
-                            (
-                                (len(c_features), cluster_id)
-                                for cluster_id, c_features in cluster_feature.items()
-                            )
+                # The logic here is to: split the largest cluster recursively until
+                # we have enough clusters.
+                while too_small_cluster_ids:
+                    # Split the biggest cluster in two.
+                    n_features, split_id = max(
+                        (
+                            (len(c_features), cluster_id)
+                            for cluster_id, c_features in cluster_feature.items()
                         )
+                    )
 
-                        to_split = list(cluster_feature[split_id])
+                    small_id = too_small_cluster_ids.pop()
 
-                        empty_id = empty_cluster_ids.pop()
-                        for feature in self.random.sample(to_split, n_features // 2):
-                            cluster_feature[split_id].discard(feature)
-                            cluster_feature[empty_id].add(feature)
-                            feature_cluster[feature] = empty_id
+                    logger.info(
+                        f"Filling cluster {small_id} by splitting largest "
+                        f"cluster {split_id} with {n_features} features."
+                    )
+
+                    # Account for pinned features when splitting clusters - also
+                    # account for large numbers of features in a cluster being pinned.
+                    to_split = list(cluster_feature[split_id] - pinned_features)
+                    sample = self.random.sample(
+                        to_split, min(len(to_split), n_features // 2)
+                    )
+                    logger.info(len(sample))
+
+                    for feature in sample:
+                        cluster_feature[split_id].discard(feature)
+                        cluster_feature[small_id].add(feature)
+                        feature_cluster[feature] = small_id
 
                 cluster_ids = list(cluster_feature.keys())
 
@@ -1252,16 +1306,20 @@ class Index:
 
         # Establish forward reverse mappings of features to clusters and vice versa.
         cluster_feature = collections.defaultdict(set)
+        pinned_features = set()
 
-        for feature_id, cluster_id in self.db.execute(
+        for feature_id, cluster_id, pinned in self.db.execute(
             """
             select
                 feature_id,
-                cluster_id
+                cluster_id,
+                feature_cluster.pinned
             from feature_cluster
             """
         ):
             cluster_feature[cluster_id].add(feature_id)
+            if pinned:
+                pinned_features.add(feature_id)
 
         target_clusters = target_clusters or len(cluster_feature)
         n_empty_required = target_clusters - len(cluster_feature)
@@ -1273,11 +1331,22 @@ class Index:
             for i in range(n_empty_required):
                 cluster_feature[next_cluster_id + i] = set()
 
+        # Remove pinned clusters from refinement. Note we do this after
+        # creating empty clusters because a pinned cluster still needs to be
+        # counted.
+        pinned_clusters = {
+            r[0] for r in self.db.execute("select cluster_id from cluster where pinned")
+        }
+
+        for cluster_id in pinned_clusters:
+            del cluster_feature[cluster_id]
+
         cluster_feature = self._refine_feature_groups(
             cluster_feature,
             iterations=iterations,
             sub_iterations=sub_iterations,
             group_test=True,
+            pinned_features=pinned_features,
         )
 
         # Serialise the actual results of the clustering!

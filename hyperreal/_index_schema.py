@@ -14,7 +14,7 @@ database, associated with CURRENT_SCHEMA_VERSION.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 CURRENT_SCHEMA = f"""
     create table if not exists doc_key (
@@ -64,14 +64,18 @@ CURRENT_SCHEMA = f"""
         docs_count integer default 0,
         -- Sum of the length of the individual feature queries that form the union
         weight integer default 0,
-        doc_ids roaring_bitmap
+        doc_ids roaring_bitmap,
+        -- Whether the cluster is pinned, and should be excluded from automatic clustering.
+        pinned bool default 0
     );
 
     --------
     create table if not exists feature_cluster (
         feature_id integer primary key references inverted_index(feature_id) on delete cascade,
         cluster_id integer references cluster(cluster_id) on delete cascade,
-        docs_count integer
+        docs_count integer,
+        -- Whether the feature is pinned, and shouldn't be considered for moving.
+        pinned bool default 0
     );
 
     --------
@@ -153,6 +157,13 @@ migrations = {
     ),
     5: ([], []),
     6: ([], []),
+    7: (
+        [
+            "alter table cluster add column pinned bool default 0",
+            "alter table feature_cluster add column pinned bool default 0",
+        ],
+        [],
+    ),
 }
 
 
