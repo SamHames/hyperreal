@@ -1111,7 +1111,6 @@ class Index:
                     sample = self.random.sample(
                         to_split, min(len(to_split), n_features // 2)
                     )
-                    logger.info(len(sample))
 
                     for feature in sample:
                         cluster_feature[split_id].discard(feature)
@@ -1285,15 +1284,20 @@ class Index:
         self,
         iterations: int = 10,
         sub_iterations: int = 2,
+        cluster_ids: Optional[Sequence[int]] = None,
         target_clusters: Optional[int] = None,
     ):
         """
-        Attempt to improve the model clustering of the features for `iterations`.
+        Refine the feature clusters for the current model.
+
+        Optionally provide a list of specific cluster_ids to refine.
 
         If target_clusters is larger than the current number of clusters in the model,
         the largest clusters by number of features will be split to reach the target.
 
         """
+
+        cluster_ids = set(cluster_ids or self.cluster_ids)
 
         if iterations < 1:
             raise ValueError(
@@ -1317,9 +1321,10 @@ class Index:
             from feature_cluster
             """
         ):
-            cluster_feature[cluster_id].add(feature_id)
-            if pinned:
-                pinned_features.add(feature_id)
+            if cluster_id in cluster_ids:
+                cluster_feature[cluster_id].add(feature_id)
+                if pinned:
+                    pinned_features.add(feature_id)
 
         target_clusters = target_clusters or len(cluster_feature)
         n_empty_required = target_clusters - len(cluster_feature)
