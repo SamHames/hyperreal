@@ -121,7 +121,7 @@ class ClusterOverview:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(cluster_id=int)
-    def delete(self, index_id, cluster_id=None):
+    def delete(self, index_id, cluster_id=None, **params):
 
         cherrypy.request.index.delete_clusters(cherrypy.request.params["cluster_id"])
 
@@ -140,7 +140,7 @@ class ClusterOverview:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(cluster_id=int)
-    def merge(self, index_id, cluster_id=None):
+    def merge(self, index_id, cluster_id=None, **params):
         merge_cluster_id = cherrypy.request.index.merge_clusters(
             cherrypy.request.params["cluster_id"]
         )
@@ -148,13 +148,25 @@ class ClusterOverview:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    def split(self, index_id, cluster_id, k, iterations):
-
-        new_cluster_ids = cherrypy.request.index.split_cluster(
-            int(cluster_id), k=int(k), iterations=int(iterations)
+    @cherrypy.tools.ensure_list(cluster_id=int)
+    def refine(
+        self,
+        index_id,
+        cluster_id=None,
+        target_clusters="10",
+        iterations="10",
+        return_to="cluster",
+    ):
+        cherrypy.request.index.refine_clusters(
+            cluster_ids=cherrypy.request.params["cluster_id"],
+            target_clusters=int(target_clusters),
         )
-
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{new_cluster_ids[0]}")
+        if return_to == "cluster":
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
+        else:
+            raise cherrypy.HTTPRedirect(
+                f"/index/{index_id}/?cluster_id={cluster_id[0]}"
+            )
 
 
 class FeatureOverview:

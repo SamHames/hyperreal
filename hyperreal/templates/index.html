@@ -24,6 +24,11 @@
             </option>
             {% endfor %}
         </select>
+        <input type="hidden" name="return_to" value="model">
+        <label for="target_clusters">Refine selection into how many clusters:</label>
+        <input id="target_clusters" name="target_clusters" type="number" value="10" />
+        <button type="submit" formaction="/index/{{ index_id }}/cluster/refine" method="post">Refine Selected Clusters</button>
+        <br>
         <button type="submit">Delete Clusters 🗑️</button>
         <button type="submit" formaction="/index/{{ index_id }}/cluster/merge" method="post">Merge Clusters</button>
     </form>

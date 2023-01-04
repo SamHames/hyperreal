@@ -275,7 +275,6 @@ def test_fixed_seed(example_index_path, n_clusters):
     index.refine_clusters(iterations=1)
 
     clustering_1 = index.top_cluster_features()
-    split_1 = index.propose_cluster_split(1, iterations=1)
     index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
     refined_clustering_1 = index.top_cluster_features()
 
@@ -287,13 +286,11 @@ def test_fixed_seed(example_index_path, n_clusters):
     index.refine_clusters(iterations=1)
 
     clustering_2 = index.top_cluster_features()
-    split_2 = index.propose_cluster_split(1, iterations=1)
     index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
     refined_clustering_2 = index.top_cluster_features()
 
     assert clustering_1 == clustering_2
     assert refined_clustering_1 == refined_clustering_2
-    assert split_1 == split_2
 
 
 def test_splitting(example_index_path):
@@ -306,7 +303,7 @@ def test_splitting(example_index_path):
     assert len(index.cluster_ids) == n_clusters
 
     for cluster_id in index.cluster_ids:
-        index.split_cluster(cluster_id, k=2, iterations=1)
+        index.refine_clusters(cluster_ids=[cluster_id], target_clusters=2, iterations=1)
 
     assert len(index.cluster_ids) == n_clusters * 2
 

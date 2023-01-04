@@ -1208,78 +1208,6 @@ class Index:
         return cluster_feature
 
     @atomic()
-    def split_cluster(
-        self,
-        cluster_id: int,
-        k: Optional[int] = None,
-        iterations: int = 10,
-        sub_iterations: int = 2,
-        group_test: bool = True,
-    ):
-        """
-        Split the given cluster up into k groups.
-
-        `iterations` worth of refinements will be running using the standard algorithm.
-
-        """
-
-        split_features = self.propose_cluster_split(
-            cluster_id,
-            k=k,
-            iterations=iterations,
-            sub_iterations=sub_iterations,
-            group_test=group_test,
-        )
-
-        # Note that the batch with the most features is left in place at the
-        # original cluster_id - this is a convenience for browsing split
-        # clusters, and allows redirecting back to most of the original
-        # cluster in the web view.
-        split_features.sort(reverse=True, key=lambda x: len(x))
-
-        assigned_cluster_ids = [cluster_id]
-
-        for feature_cluster in split_features[1:]:
-            new_cluster_id = self.create_cluster_from_features(feature_cluster)
-            assigned_cluster_ids.append(new_cluster_id)
-
-        return assigned_cluster_ids
-
-    @atomic()
-    def propose_cluster_split(
-        self,
-        cluster_id: int,
-        k: Optional[int] = None,
-        iterations: int = 10,
-        sub_iterations: int = 2,
-        group_test: bool = True,
-    ):
-        """
-        Compute a proposed split of the given cluster.
-
-        k specifies the number of a splits, if left at the default of None, it
-        will be automatically split as the sqrt(number of features).
-
-        Returns a list of clusters of features representing the split. To
-        actually save the feature you will need to call
-        `create_cluster_from_features` on each group.
-
-        """
-        cluster_features = self.cluster_features(cluster_id)
-        k = k or math.ceil(len(cluster_features) ** 0.5)
-
-        feature_ids = [r[0] for r in cluster_features]
-        self.random.shuffle(feature_ids)
-
-        split_cluster_features = {i: set(feature_ids[i::k]) for i in range(k)}
-
-        return list(
-            self._refine_feature_groups(
-                split_cluster_features, iterations, sub_iterations, group_test
-            ).values()
-        )
-
-    @atomic()
     def refine_clusters(
         self,
         iterations: int = 10,
@@ -1292,8 +1220,10 @@ class Index:
 
         Optionally provide a list of specific cluster_ids to refine.
 
-        If target_clusters is larger than the current number of clusters in the model,
-        the largest clusters by number of features will be split to reach the target.
+        If target_clusters is larger than the current number of clusters in
+        the model, the largest clusters by number of features will be split
+        to reach the target. This can be used to split all or some selected
+        clusters.
 
         """
 
