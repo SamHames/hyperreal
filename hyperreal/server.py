@@ -121,11 +121,15 @@ class ClusterOverview:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(cluster_id=int)
-    def delete(self, index_id, cluster_id=None, **params):
+    def delete(self, index_id, cluster_id=None, return_cluster_id=None, **params):
 
         cherrypy.request.index.delete_clusters(cherrypy.request.params["cluster_id"])
 
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}")
+        if return_cluster_id:
+            redirect_to = f"/index/{index_id}/cluster/{return_cluster_id}"
+        else:
+            redirect_to = f"/index/{index_id}"
+        raise cherrypy.HTTPRedirect(redirect_to)
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
