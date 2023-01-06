@@ -6,6 +6,11 @@ from pyroaring import BitMap
 import regex
 
 
+# Used to transform left/right sided curly quotes into their straight quote
+# equivalents. This is particularly important on social media as the IOS
+# keyboard defaults to curly quotes, unlike Android and Desktops.
+curly_quote_translator = str.maketrans("‘’“”", "''\"\"")
+
 word_tokenizer = regex.compile(
     # Note this handles 'quoted' words a little weirdly: 'orange' is tokenised
     # as ["orange", "'"] I'd prefer to tokenise this as p"'", "orange", "'"]
@@ -36,7 +41,9 @@ plain_text_tokenizer = regex.compile(
 
 
 def social_media_tokens(entry):
-    cleaned = social_media_cleaner.sub("", entry.lower())
+    cleaned = social_media_cleaner.sub(
+        "", entry.translate(curly_quote_translator).lower()
+    )
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
     tokens.append(None)
     return tokens
