@@ -710,7 +710,7 @@ class Index:
 
         self.db.execute("drop table include_field")
 
-        self.logger.info(f"Initialised new model with {n_clusters}.")
+        self.logger.info(f"Initialised new model with {n_clusters} clusters.")
 
     @atomic(writes=True)
     def delete_clusters(self, cluster_ids):
@@ -951,7 +951,17 @@ class Index:
 
         return future.result()[1:]
 
-    def _calculate_assignments(self, group_features, group_checks):
+    def cluster_docs(self, cluster_id: int) -> AbstractBitMap:
+        """Return the bitmap of documents covered by this cluster."""
+        return list(
+            self.db.execute(
+                "select doc_ids from cluster where cluster_id = ?", [cluster_id]
+            )
+        )[0][0]
+
+    def _calculate_assignments(
+        self, group_features, group_checks, probe_query: Optional[AbstractBitMap] = None
+    ):
         """
         Determine the assignments of features to clusters given these features groups.
 
@@ -972,6 +982,7 @@ class Index:
                     group_key,
                     features,
                     group_checks[group_key],
+                    probe_query,
                 )
                 for group_key, features in group_features.items()
                 if group_key in group_checks
@@ -1010,9 +1021,10 @@ class Index:
         iterations: int = 10,
         sub_iterations: int = 2,
         group_test: bool = False,
-        minimum_cluster_size: int = 1,
+        minimum_cluster_size: int = 3,
         pinned_features: Optional[Iterable] = None,
-    ):
+        probe_query: Optional[AbstractBitMap] = None,
+    ) -> dict[Hashable, set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
 
@@ -1026,6 +1038,12 @@ class Index:
         the largest clusters up.
 
         Pinned features will not be considered as candidates for moving.
+
+        If a probe_query is provided, it will be intersected with all features
+        for clustering: this is used to generate a clustering for a subset of
+        the data. Note that features may not intersect with the probe query -
+        clustering is not well defined in this case and should be used with
+        care.
 
         """
 
@@ -1088,7 +1106,8 @@ class Index:
                     )
 
                 # The logic here is to: split the largest cluster recursively until
-                # we have enough clusters.
+                # we have enough clusters. Maybe in the future this could be a split
+                # and refine clustering instead of a simple random split?
                 while too_small_cluster_ids:
                     # Split the biggest cluster in two.
                     n_features, split_id = max(
@@ -1100,7 +1119,7 @@ class Index:
 
                     small_id = too_small_cluster_ids.pop()
 
-                    logger.info(
+                    logger.debug(
                         f"Filling cluster {small_id} by splitting largest "
                         f"cluster {split_id} with {n_features} features."
                     )
@@ -1161,7 +1180,7 @@ class Index:
                     }
 
                     batch_assignments, _ = self._calculate_assignments(
-                        group_features, group_tests
+                        group_features, group_tests, probe_query
                     )
 
                     # Convert the group tests into individual cluster tests
@@ -1186,7 +1205,7 @@ class Index:
 
                 # Compute the final assignments
                 assignments, total_objective = self._calculate_assignments(
-                    cluster_feature, cluster_tests
+                    cluster_feature, cluster_tests, probe_query
                 )
 
                 # Unpack the beam search to assign to the nearest cluster
@@ -1686,7 +1705,7 @@ def _pivot_cluster_by_query_chi_squared(args):
 
 
 def measure_features_to_feature_group(
-    index_db_path, group_key, feature_group, comparison_features
+    index_db_path, group_key, feature_group, comparison_features, probe_query
 ):
     """
     Measure the objective for moving the given subset of features into the
@@ -1726,6 +1745,9 @@ def measure_features_to_feature_group(
 
             docs = index[feature]
 
+            if probe_query:
+                docs &= probe_query
+
             hits += len(docs)
 
             # Docs covered at least twice
@@ -1742,7 +1764,11 @@ def measure_features_to_feature_group(
 
         # All tokens that are adds (not already in the cluster)
         for feature in sorted(comparison_features - feature_group):
+
             docs = index[feature]
+
+            if probe_query:
+                docs &= probe_query
 
             feature_hits = len(docs)
 
@@ -1762,7 +1788,11 @@ def measure_features_to_feature_group(
         # Effectively we're counting the negative of the score for removing that feature
         # as the effect of adding it to the cluster.
         for feature in sorted(feature_group & comparison_features):
+
             docs = index[feature]
+
+            if probe_query:
+                docs &= probe_query
 
             feature_hits = len(docs)
 
