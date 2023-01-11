@@ -934,9 +934,23 @@ class Index:
         return cluster_features
 
     @atomic()
+    def union_bitslice(self, features: Sequence[FeatureKeyOrId]):
+        """
+        Return matching documents and accumulated bitslice for the given set
+        of features.
+
+        """
+
+        bitmaps = (self[feature] for feature in features)
+        return utilities.compute_bitslice(bitmaps)
+
+    @atomic()
     def cluster_query(self, cluster_id):
         """
         Return matching documents and accumulated bitslice for cluster_id.
+
+        If you only need the matching documents, the `cluster_docs` method is
+        faster as it retrieves a precomputed set of documents.
 
         The matching documents are the documents that contain any terms from
         the cluster. The returned bitslice represents the accumulation of
@@ -947,9 +961,7 @@ class Index:
 
         feature_ids = [r[0] for r in self.cluster_features(cluster_id)]
 
-        future = self.pool.submit(_union_bitslice, [self.db_path, None, feature_ids])
-
-        return future.result()[1:]
+        return self.union_bitslice(feature_ids)
 
     def cluster_docs(self, cluster_id: int) -> AbstractBitMap:
         """Return the bitmap of documents covered by this cluster."""
@@ -1633,7 +1645,7 @@ def _pivot_cluster_by_query_jaccard(args):
         )
 
     results = sorted(
-        ((*r[1:], r[0]) for r in results if r[1] >= 0), reverse=True, key=lambda r: r[3]
+        ((*r[1:], r[0]) for r in results if r[0] > 0), reverse=True, key=lambda r: r[3]
     )
 
     # Finally compute the similarity of the query with the cluster_union.
@@ -1837,33 +1849,3 @@ def _union_query(args):
         index.close()
 
     return query_key, query, weight
-
-
-def _union_bitslice(args):
-
-    index_db_path, query_key, feature_ids = args
-
-    try:
-        index = Index(index_db_path)
-        matching = BitMap()
-        bitslice = [BitMap()]
-
-        for feature_id in feature_ids:
-            doc_ids = index[feature_id]
-
-            matching |= doc_ids
-
-            for i, bs in enumerate(bitslice):
-                carry = bs & doc_ids
-                bs ^= doc_ids
-                doc_ids = carry
-                if not carry:
-                    break
-
-            if carry:
-                bitslice.append(carry)
-
-    finally:
-        index.close()
-
-    return query_key, matching, bitslice

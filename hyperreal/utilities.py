@@ -189,3 +189,26 @@ def round_datetime(datetime):
     year = month.replace(month=1)
 
     return {"minute": minute, "hour": hour, "day": day, "month": month, "year": year}
+
+
+def compute_bitslice(bitmaps):
+    """Compute the bitslice of the given bitmaps."""
+    matching = BitMap()
+    bitslice = [BitMap()]
+
+    for bitmap in bitmaps:
+        doc_ids = bitmap
+
+        matching |= doc_ids
+
+        for i, bs in enumerate(bitslice):
+            carry = bs & doc_ids
+            bs ^= doc_ids
+            doc_ids = carry
+            if not carry:
+                break
+
+        if carry:
+            bitslice.append(carry)
+
+    return matching, bitslice
