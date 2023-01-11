@@ -1021,7 +1021,7 @@ class Index:
         iterations: int = 10,
         sub_iterations: int = 2,
         group_test: bool = False,
-        minimum_cluster_size: int = 3,
+        minimum_cluster_size: int = 1,
         pinned_features: Optional[Iterable] = None,
         probe_query: Optional[AbstractBitMap] = None,
     ) -> dict[Hashable, set[int]]:
@@ -1085,12 +1085,14 @@ class Index:
             # set of features, at the cost of more time for each subiteration.
             for sub_iter in range(sub_iterations):
 
-                # Current cluster_ids above the minimum size
-                # Note that this will dissolve clusters below the minimum size!
+                # Current cluster_ids above the minimum size Note that this
+                # will dissolve clusters below the minimum size unless they
+                # contain a pinned feature!
                 current_cluster_ids = {
                     cluster_id
                     for cluster_id, values in cluster_feature.items()
                     if len(values) >= minimum_cluster_size
+                    and not values & pinned_features
                 }
 
                 too_small_cluster_ids = assigned_cluster_ids - current_cluster_ids
