@@ -182,6 +182,26 @@ class ClusterOverview:
                 f"/index/{index_id}/?cluster_id={cluster_id[0]}"
             )
 
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    @cherrypy.tools.ensure_list(cluster_id=int)
+    def pin(self, index_id, cluster_id=None, pinned="1", return_to="cluster"):
+        """
+        Pin or unpin the selected clusters.
+
+        Pinned clusters will not be affected by future iterations of the algorithm.
+
+        """
+        cherrypy.request.index.pin_clusters(
+            cluster_ids=cherrypy.request.params["cluster_id"], pinned=int(pinned)
+        )
+        if return_to == "cluster":
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
+        else:
+            raise cherrypy.HTTPRedirect(
+                f"/index/{index_id}/?cluster_id={cluster_id[0]}"
+            )
+
 
 class FeatureOverview:
     @cherrypy.expose
@@ -193,6 +213,25 @@ class FeatureOverview:
     @cherrypy.tools.ensure_list(feature_id=int)
     def remove_from_model(self, index_id, feature_id=None, cluster_id=None):
         cherrypy.request.index.delete_features(cherrypy.request.params["feature_id"])
+        if cluster_id is not None:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
+        else:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    @cherrypy.tools.ensure_list(feature_id=int)
+    def pin(self, index_id, feature_id=None, cluster_id=None, pinned="1"):
+        """
+        Pin the selected features.
+
+        Pinned features will not be moved algorithmically, and clusters containing any
+        pinned features will not be automatically split.
+
+        """
+        cherrypy.request.index.pin_features(
+            cherrypy.request.params["feature_id"], pinned=int(pinned)
+        )
         if cluster_id is not None:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
         else:
