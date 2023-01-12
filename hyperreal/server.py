@@ -55,8 +55,7 @@ class Cluster:
         index_id,
         cluster_id,
         feature_id=None,
-        top_k_features="10",
-        exemplar_docs="10",
+        exemplar_docs="30",
         scoring="jaccard",
     ):
         template = templates.get_template("cluster.html")
@@ -80,24 +79,35 @@ class Cluster:
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
         rendered_docs = []
-        total_docs = 0
 
         if feature_id is not None:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
-            features = cherrypy.request.index.pivot_clusters_by_query(
+            sorted_features = cherrypy.request.index.pivot_clusters_by_query(
                 query,
                 cluster_ids=[cluster_id],
                 top_k=n_features,
                 scoring=scoring,
-            )[0][-1]
+            )
 
-            if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.render_docs(
-                    query, random_sample_size=int(exemplar_docs)
-                )
+            # Make sure that there are actually matching features.
+            if sorted_features:
+                features = sorted_features[0][-1]
 
-            total_docs = len(query)
+            # Make sure to only show the intersection of the requested feature with
+            # the current cluster.
+            retrieve_docs = query & cherrypy.request.index.cluster_docs(cluster_id)
+
+        else:
+            retrieve_docs = cherrypy.request.index.cluster_docs(cluster_id)
+
+        # Retrieve matching documents if we have a corpus to render them.
+        if cherrypy.request.index.corpus is not None:
+            rendered_docs = cherrypy.request.index.render_docs(
+                retrieve_docs, random_sample_size=int(exemplar_docs)
+            )
+
+        total_docs = len(retrieve_docs)
 
         return template.render(
             cluster_id=cluster_id,
