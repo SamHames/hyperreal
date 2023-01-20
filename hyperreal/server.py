@@ -170,10 +170,13 @@ class ClusterOverview:
         target_clusters="10",
         iterations="10",
         return_to="cluster",
+        minimum_cluster_features="1",
     ):
         cherrypy.request.index.refine_clusters(
             cluster_ids=cherrypy.request.params["cluster_id"],
             target_clusters=int(target_clusters),
+            minimum_cluster_features=int(minimum_cluster_features),
+            iterations=int(iterations),
         )
         if return_to == "cluster":
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
@@ -367,6 +370,7 @@ class Index:
         min_docs="10",
         clusters="64",
         iterations="10",
+        minimum_cluster_features="1",
     ):
         """
         (Re)Create the model for this index with the given parameters.
@@ -380,19 +384,30 @@ class Index:
             include_fields=include_fields or None,
         )
 
-        cherrypy.request.index.refine_clusters(iterations=int(iterations))
+        cherrypy.request.index.refine_clusters(
+            iterations=int(iterations),
+            minimum_cluster_features=int(minimum_cluster_features),
+        )
 
         raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    def refine_model(self, index_id, iterations="10", target_clusters="0"):
+    def refine_model(
+        self,
+        index_id,
+        iterations="10",
+        target_clusters="0",
+        minimum_cluster_features="1",
+    ):
         """
         Refine the existing model for the given number of iterations.
 
         """
         cherrypy.request.index.refine_clusters(
-            iterations=int(iterations), target_clusters=int(target_clusters) or None
+            iterations=int(iterations),
+            target_clusters=int(target_clusters) or None,
+            minimum_cluster_features=int(minimum_cluster_features),
         )
 
         raise cherrypy.HTTPRedirect(f"/index/{index_id}")

@@ -1033,7 +1033,7 @@ class Index:
         iterations: int = 10,
         sub_iterations: int = 2,
         group_test: bool = False,
-        minimum_cluster_size: int = 1,
+        minimum_cluster_features: int = 1,
         pinned_features: Optional[Iterable] = None,
         probe_query: Optional[AbstractBitMap] = None,
     ) -> dict[Hashable, set[int]]:
@@ -1103,7 +1103,7 @@ class Index:
                 current_cluster_ids = {
                     cluster_id
                     for cluster_id, values in cluster_feature.items()
-                    if len(values) >= minimum_cluster_size
+                    if len(values) >= minimum_cluster_features
                     and not values & pinned_features
                 }
 
@@ -1247,6 +1247,7 @@ class Index:
         sub_iterations: int = 2,
         cluster_ids: Optional[Sequence[int]] = None,
         target_clusters: Optional[int] = None,
+        minimum_cluster_features: int = 1,
     ):
         """
         Refine the feature clusters for the current model.
@@ -1315,6 +1316,7 @@ class Index:
             sub_iterations=sub_iterations,
             group_test=True,
             pinned_features=pinned_features,
+            minimum_cluster_features=minimum_cluster_features,
         )
 
         # Serialise the actual results of the clustering!

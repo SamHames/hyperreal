@@ -59,6 +59,10 @@
                     <label for="clusters">Number of clusters in the model:</label>
                     <input id="clusters" name="clusters" type="number" value="64" />
                 </li>
+                <li>
+                    <label for="minimum_cluster_features">Minimum number of features in split clusters:</label>
+                    <input id="minimum_cluster_features" name="minimum_cluster_features" type="number" value="1" />
+                </li>
             </ul>
         </fieldset>
         <button type="submit">Recreate Model</button>
@@ -77,6 +81,10 @@
                 <li>
                     <label for="target_clusters">Target number of clusters (current model contains {{ current_clusters }}):</label>
                     <input id="target_clusters" name="target_clusters" type="number" value="{{ current_clusters }}" />
+                </li>
+                <li>
+                    <label for="minimum_cluster_features">Minimum number of features in split clusters:</label>
+                    <input id="minimum_cluster_features" name="minimum_cluster_features" type="number" value="1" />
                 </li>
             </ul>
         </fieldset>
