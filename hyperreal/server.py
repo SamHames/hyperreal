@@ -55,6 +55,7 @@ class Cluster:
         index_id,
         cluster_id,
         feature_id=None,
+        filter_cluster_id=None,
         exemplar_docs="30",
         scoring="jaccard",
     ):
@@ -79,10 +80,23 @@ class Cluster:
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
         rendered_docs = []
+        query = None
 
         if feature_id is not None:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
+            print(len(query))
+
+        if filter_cluster_id is not None:
+            filter_cluster_id = int(filter_cluster_id)
+            if query:
+                query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
+                print(len(query))
+            else:
+                query = cherrypy.request.index.cluster_docs(filter_cluster_id)
+                print(len(query))
+
+        if query:
             sorted_features = cherrypy.request.index.pivot_clusters_by_query(
                 query,
                 cluster_ids=[cluster_id],
