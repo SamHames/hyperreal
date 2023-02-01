@@ -1734,6 +1734,7 @@ def measure_features_to_feature_group(
 
     try:
         index = Index(index_db_path)
+        index.db.execute("begin")
 
         if not feature_group:
             return None
@@ -1828,6 +1829,7 @@ def measure_features_to_feature_group(
             array_index += 1
 
     finally:
+        index.db.execute("commit")
         index.close()
 
     return group_key, return_features, result_delta, already_in, objective
