@@ -1086,7 +1086,8 @@ class Index:
 
         for iteration in range(iterations):
 
-            self.logger.info(f"Starting iteration {iteration + 1}/{iterations}")
+            iteration_moves = 0
+            changed_clusters = set()
 
             # We want a completely different order of feature checks on each
             # iteration. This randomised ordering is also used to break into
@@ -1176,7 +1177,9 @@ class Index:
                     # The square root heuristic here let's us spend roughly
                     # the same time on the group tests and the detailed
                     # tests.
-                    n_batches = math.ceil(n_clusters**0.5)
+                    n_batches = max(
+                        self.pool._max_workers, math.ceil(n_clusters**0.5)
+                    )
 
                     # Assemble random batches of clusters to check against.
                     group_features = {
@@ -1225,11 +1228,22 @@ class Index:
                 # Unpack the beam search to assign to the nearest cluster
                 # Note on the last iteration, the assignments will be used
                 # to track the nearest neighbours for other uses.
-                for feature, (delta, cluster_id) in assignments.items():
+                for feature, (delta, new_cluster_id) in assignments.items():
 
-                    cluster_feature[feature_cluster[feature]].discard(feature)
-                    cluster_feature[cluster_id].add(feature)
-                    feature_cluster[feature] = cluster_id
+                    old_cluster_id = feature_cluster[feature]
+
+                    if old_cluster_id != new_cluster_id:
+                        iteration_moves += 1
+                        changed_clusters.add(old_cluster_id)
+                        changed_clusters.add(new_cluster_id)
+                        cluster_feature[old_cluster_id].discard(feature)
+                        cluster_feature[new_cluster_id].add(feature)
+                        feature_cluster[feature] = new_cluster_id
+
+            self.logger.info(
+                f"Finished iteration {iteration + 1}/{iterations}: "
+                f"moved {iteration_moves} features in {len(changed_clusters)} clusters."
+            )
 
         # prune empty clusters before returning
         cluster_feature = {
