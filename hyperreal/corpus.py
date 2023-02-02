@@ -155,39 +155,49 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         self.db.execute("pragma journal_mode=WAL")
         self.db.execute("savepoint add_texts")
 
-        self.db.execute("drop table if exists doc")
-        self.db.execute(
-            """
-            create table doc(
-                doc_id integer primary key,
-                text not null
+        try:
+
+            self.db.execute("drop table if exists doc")
+            self.db.execute(
+                """
+                create table doc(
+                    doc_id integer primary key,
+                    text not null
+                )
+                """
             )
-            """
-        )
 
-        self.db.execute("delete from doc")
-        self.db.executemany(
-            "insert or ignore into doc(text) values(?)", ([t] for t in texts)
-        )
+            self.db.execute("delete from doc")
+            self.db.executemany(
+                "insert or ignore into doc(text) values(?)", ([t] for t in texts)
+            )
 
-        self.db.execute("release add_texts")
+        except Exception:
+            self.db.execute("rollback to add_texts")
+
+        finally:
+            self.db.execute("release add_texts")
 
     def docs(self, doc_keys=None):
 
         self.db.execute("savepoint docs")
+        try:
 
-        # Note that it's valid to pass an empty sequence of doc_keys,
-        # so we need to check sentinel explicitly.
-        if doc_keys is None:
-            doc_keys = self.keys()
+            # Note that it's valid to pass an empty sequence of doc_keys,
+            # so we need to check sentinel explicitly.
+            if doc_keys is None:
+                doc_keys = self.keys()
 
-        for key in doc_keys:
-            doc = list(
-                self.db.execute("select doc_id, text from doc where doc_id = ?", [key])
-            )[0]
-            yield key, doc
+            for key in doc_keys:
+                doc = list(
+                    self.db.execute(
+                        "select doc_id, text from doc where doc_id = ?", [key]
+                    )
+                )[0]
+                yield key, doc
 
-        self.db.execute("release docs")
+        finally:
+            self.db.execute("release docs")
 
     def keys(self):
         return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
