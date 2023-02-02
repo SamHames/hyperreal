@@ -339,7 +339,6 @@ class Index:
             raise ValueError(f"merge_batches must be <= 10.")
 
         try:
-
             tempdir = working_dir or tempfile.TemporaryDirectory()
             current_temp_file_counter = 0
 
@@ -370,7 +369,6 @@ class Index:
             self.logger.info("Beginning indexing.")
 
             for doc_key in doc_keys:
-
                 self.db.execute("insert into doc_key values(?, ?)", doc_key)
                 batch_doc_ids.append(doc_key[0])
                 batch_doc_keys.append(doc_key[1])
@@ -395,7 +393,6 @@ class Index:
                     batch_size = 0
 
                     if len(futures) >= workers:
-
                         done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
 
                         for f in done:
@@ -1011,7 +1008,6 @@ class Index:
         assignments = collections.defaultdict(lambda: (-math.inf, -1))
 
         for f in cf.as_completed(futures):
-
             result = f.result()
 
             if result is None:
@@ -1022,7 +1018,6 @@ class Index:
             total_objective += objective
 
             for feature, delta in zip(check_features, delta):
-
                 assignments[feature] = max(assignments[feature], (delta, group_key))
 
         return assignments, total_objective
@@ -1085,7 +1080,6 @@ class Index:
         available_workers = self.pool._max_workers
 
         for iteration in range(iterations):
-
             iteration_moves = 0
             changed_clusters = set()
 
@@ -1097,7 +1091,6 @@ class Index:
             # More subiterations --> Less perturbation of the model for each
             # set of features, at the cost of more time for each subiteration.
             for sub_iter in range(sub_iterations):
-
                 # Current cluster_ids above the minimum size Note that this
                 # will dissolve clusters below the minimum size unless they
                 # contain a pinned feature!
@@ -1173,7 +1166,6 @@ class Index:
                 cluster_worker_ratio = n_clusters / available_workers
 
                 if group_test and cluster_worker_ratio >= 2:
-
                     # The square root heuristic here let's us spend roughly
                     # the same time on the group tests and the detailed
                     # tests.
@@ -1213,7 +1205,6 @@ class Index:
 
                 # Too few clusters, or group testing turned off: check all against all
                 else:
-
                     cluster_tests = {
                         cluster_id: moving_features for cluster_id in cluster_ids
                     }
@@ -1229,7 +1220,6 @@ class Index:
                 # Note on the last iteration, the assignments will be used
                 # to track the nearest neighbours for other uses.
                 for feature, (delta, new_cluster_id) in assignments.items():
-
                     old_cluster_id = feature_cluster[feature]
 
                     if old_cluster_id != new_cluster_id:
@@ -1308,7 +1298,6 @@ class Index:
         n_empty_required = target_clusters - len(cluster_feature)
 
         if n_empty_required > 0:
-
             next_cluster_id = self.next_cluster_id()
 
             for i in range(n_empty_required):
@@ -1404,7 +1393,6 @@ class Index:
         # Note that the data here may not have been committed yet, so we have
         # to read and pass the feature_ids to the background ourselves.
         for cluster_id, query, weight in self.pool.map(_union_query, bg_args):
-
             self.db.execute(
                 """
                 update cluster set (docs_count, weight, doc_ids) = (?, ?, ?)
@@ -1440,7 +1428,6 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size):
         for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
             for field, values in features.items():
-
                 # Only find bigrams in sequences - non sequence types such as
                 # a set don't make sense to do this.
                 if skipgram_window_size > 0 and isinstance(
@@ -1598,7 +1585,6 @@ def _merge_indices(target_db_path, level, *to_merge):
 
 
 def _pivot_cluster_by_query_jaccard(args):
-
     index_db_path, query, cluster_id, top_k = args
     index = Index(index_db_path)
 
@@ -1624,7 +1610,6 @@ def _pivot_cluster_by_query_jaccard(args):
     )
 
     for feature_id, field, value, docs_count, docs in search_upper:
-
         # Early break if the length threshold can't be reached.
         if q / docs_count <= results[0][0]:
             break
@@ -1651,7 +1636,6 @@ def _pivot_cluster_by_query_jaccard(args):
     )
 
     for feature_id, field, value, docs_count, docs in search_upper:
-
         # Early break if the length threshold can't be reached.
         if docs_count / q <= results[0][0]:
             break
@@ -1679,7 +1663,6 @@ def _pivot_cluster_by_query_jaccard(args):
 
 
 def _pivot_cluster_by_query_chi_squared(args):
-
     index_db_path, query, cluster_id, top_k, N = args
     index = Index(index_db_path)
 
@@ -1703,7 +1686,6 @@ def _pivot_cluster_by_query_chi_squared(args):
     )
 
     for feature_id, field, value, docs_count, docs in search:
-
         f = docs_count
 
         # These are the cells in the 2x2 contingency table
@@ -1773,7 +1755,6 @@ def measure_features_to_feature_group(
         # Construct the union of all cluster tokens, and also the set of
         # documents only covered by a single feature.
         for feature in feature_group:
-
             docs = index[feature]
 
             if probe_query:
@@ -1795,7 +1776,6 @@ def measure_features_to_feature_group(
 
         # All tokens that are adds (not already in the cluster)
         for feature in sorted(comparison_features - feature_group):
-
             docs = index[feature]
 
             if probe_query:
@@ -1819,7 +1799,6 @@ def measure_features_to_feature_group(
         # Effectively we're counting the negative of the score for removing that feature
         # as the effect of adding it to the cluster.
         for feature in sorted(feature_group & comparison_features):
-
             docs = index[feature]
 
             if probe_query:
@@ -1850,7 +1829,6 @@ def measure_features_to_feature_group(
 
 
 def _union_query(args):
-
     index_db_path, query_key, feature_ids = args
 
     try:

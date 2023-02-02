@@ -146,7 +146,6 @@ class ClusterOverview:
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(cluster_id=int)
     def delete(self, index_id, cluster_id=None, return_cluster_id=None, **params):
-
         cherrypy.request.index.delete_clusters(cherrypy.request.params["cluster_id"])
 
         if return_cluster_id:
@@ -159,7 +158,6 @@ class ClusterOverview:
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(feature_id=int)
     def create(self, index_id, feature_id=None, cluster_id=None):
-
         new_cluster_id = cherrypy.request.index.create_cluster_from_features(
             cherrypy.request.params["feature_id"]
         )
@@ -259,7 +257,6 @@ class FeatureOverview:
 @cherrypy.tools.cleanup_index()
 @cherrypy.tools.lookup_index()
 class Index:
-
     cluster = ClusterOverview()
     feature = FeatureOverview()
 
@@ -273,7 +270,6 @@ class Index:
         top_k_features="20",
         scoring="jaccard",
     ):
-
         template = templates.get_template("index.html")
 
         rendered_docs = []
@@ -431,7 +427,6 @@ class Index:
 class IndexOverview:
     @cherrypy.expose
     def index(self):
-
         template = templates.get_template("index_listing.html")
         indices = cherrypy.request.config["index_server"].list_indices()
         return template.render(indices=indices)

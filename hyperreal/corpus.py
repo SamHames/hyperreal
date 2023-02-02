@@ -135,11 +135,9 @@ class SqliteBackedCorpus(BaseCorpus):
 
 
 class PlainTextSqliteCorpus(SqliteBackedCorpus):
-
     CORPUS_TYPE = "PlainTextSqliteCorpus"
 
     def __init__(self, db_path, tokeniser=utilities.tokens):
-
         super().__init__(db_path)
 
         self.tokeniser = tokeniser
@@ -179,7 +177,6 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
             self.db.execute("release add_texts")
 
     def docs(self, doc_keys=None):
-
         self.db.execute("savepoint docs")
         try:
 
@@ -213,7 +210,6 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
 
 class StackExchangeCorpus(SqliteBackedCorpus):
-
     CORPUS_TYPE = "StackExchangeCorpus"
 
     def add_site_data(self, posts_file, comments_file, users_file, site_url):
@@ -325,7 +321,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             post_types = {"1": "Question", "2": "Answer"}
 
             for event, elem in tree:
-
                 # We only consider questions and answers - SX uses other post types
                 # to describe wiki's, tags, moderator nominations and more.
                 if elem.attrib.get("PostTypeId") not in ("1", "2"):
@@ -376,7 +371,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             tree = ElementTree.iterparse(comments_file, events=("end",))
 
             for event, elem in tree:
-
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
                 doc["site_id"] = site_id
@@ -401,7 +395,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             tree = ElementTree.iterparse(users_file, events=("end",))
 
             for event, elem in tree:
-
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
                 doc["site_id"] = site_id
@@ -445,7 +438,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc_keys = self.keys()
 
             for key in doc_keys:
-
                 doc = list(
                     self.db.execute(
                         """
@@ -568,7 +560,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     )
 
     def _render_doc_key(self, key):
-
         base_fields = list(
             self.db.execute(
                 """
@@ -653,7 +644,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
     def index(self, doc):
-
         indexed = {
             "UserPosting": set([doc["DisplayName"]]),
             # Note tokenise different components separately, so there are
@@ -732,7 +722,6 @@ class TwittersphereCorpus(SqliteBackedCorpus):
     CORPUS_TYPE = "TwittersphereCorpus"
 
     def __init__(self, db_path):
-
         super().__init__(db_path)
 
         version_rows = list(
@@ -763,7 +752,6 @@ class TwittersphereCorpus(SqliteBackedCorpus):
                 doc_keys = self.keys()
 
             for tweet_id in doc_keys:
-
                 doc = list(
                     self.db.execute(
                         """
@@ -874,7 +862,6 @@ class TwittersphereCorpus(SqliteBackedCorpus):
             self.db.execute("release docs")
 
     def _retrieve_user(self, user_id):
-
         return list(
             self.db.execute("select * from user_latest where user_id = ?", [user_id])
         )[0]
@@ -928,7 +915,6 @@ class TwittersphereCorpus(SqliteBackedCorpus):
         )
 
     def index(self, doc):
-
         # Round down datetime to various degrees of granularity
         created_at = isoparse(doc["created_at"])
         rounded_times = utilities.round_datetime(created_at)

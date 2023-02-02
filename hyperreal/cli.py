@@ -339,7 +339,6 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 def model(
     index_db, iterations, clusters, min_docs, restart, include_field, random_seed
 ):
-
     doc_index = hyperreal.index.Index(index_db, random_seed=random_seed)
 
     # Check if any clusters exist.

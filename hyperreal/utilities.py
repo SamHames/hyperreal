@@ -164,12 +164,10 @@ def long_distance_bigrams(items, max_window_size, include_items=None):
         position_stream = list(enumerate(items))
 
     for i, (position_a, item_a) in enumerate(position_stream):
-
         if item_a is None:
             continue
 
         for position_b, item_b in position_stream[i + 1 : i + 1 + max_window_size]:
-
             gap = position_b - position_a
 
             if item_b is None or (gap > max_window_size):
@@ -181,7 +179,6 @@ def long_distance_bigrams(items, max_window_size, include_items=None):
 
 
 def round_datetime(datetime):
-
     minute = datetime.replace(second=0, microsecond=0)
     hour = minute.replace(minute=0)
     day = hour.replace(hour=0)

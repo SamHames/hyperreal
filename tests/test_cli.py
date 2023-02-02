@@ -18,7 +18,6 @@ corpora_path = pathlib.Path("tests", "corpora")
 
 
 def test_plaintext_corpus(tmp_path):
-
     target_corpora_db = tmp_path / "test.db"
     target_index_db = tmp_path / "test_index.db"
 
@@ -53,7 +52,6 @@ def test_plaintext_corpus(tmp_path):
 
 
 def test_twittersphere_corpus(tmp_path):
-
     target_corpora_db = corpora_path / "twitter.db"
     target_index_db = tmp_path / "twitter_index.db"
 
@@ -81,7 +79,6 @@ def test_twittersphere_corpus(tmp_path):
 
 
 def test_sx_corpus(tmp_path):
-
     target_corpora_db = tmp_path / "sx_corpus.db"
     target_index_db = tmp_path / "sx_corpus_index.db"
 

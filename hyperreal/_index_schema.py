@@ -210,7 +210,6 @@ def migrate(db):
         return False
 
     elif db_version in migrations:
-
         db.execute("begin")
 
         m = sorted(migrations.items())
