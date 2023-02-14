@@ -10,30 +10,11 @@ on:
     branches: [ main ]
 
 jobs:
-  prepare-test-data:
-    runs-on: ubuntu-latest
-    concurrency: twitter-streaming-api-key
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: 3.9
-    - name: Collect Twitter data
-      env:
-        BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
-      run: |
-        python -m pip install tox
-        tox -e collect_prepare_twitter_test_data
-    - name: Archive sample twitter data
-      uses: actions/upload-artifact@v3
-      with:
-        name: test-twitter-data
-        path: tests/corpora/twitter.db
-        retention-days: 1
 
   build:
-    needs: prepare-test-data
+    env:
+      # Used to skip tests that can't be run in CI
+      RUNNING_IN_CI: "1"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

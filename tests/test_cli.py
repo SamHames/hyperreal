@@ -6,10 +6,12 @@ Note that the Twitter tests require that some Twitter data has been collected.
 See the tox environment "collect_twitter_test_data" for this.
 
 """
+import os
 import pathlib
 import sqlite3
 
 from click.testing import CliRunner
+import pytest
 
 from hyperreal import cli
 
@@ -51,6 +53,10 @@ def test_plaintext_corpus(tmp_path):
     )
 
 
+@pytest.mark.skipif(
+    os.environ.get("RUNNING_IN_CI", False),
+    reason="Requires Twitter API data which can't be stored in CI",
+)
 def test_twittersphere_corpus(tmp_path):
     target_corpora_db = corpora_path / "twitter.db"
     target_index_db = tmp_path / "twitter_index.db"
