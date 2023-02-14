@@ -24,11 +24,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: Grab collected sample data
-      uses: actions/download-artifact@v3
-      with:
-        name: test-twitter-data
-        path: tests/corpora/
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
       with:
