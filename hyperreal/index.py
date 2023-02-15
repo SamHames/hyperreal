@@ -1121,9 +1121,7 @@ class Index:
                 cluster_feature[cluster_id] = set()
 
             if too_small_cluster_ids:
-                logger.info(
-                    f"Dissolving {len(too_small_cluster_ids)} too-small clusters."
-                )
+                logger.info(f"Filling {len(too_small_cluster_ids)} too-small clusters.")
 
             # The logic here is to: split the largest cluster recursively until
             # we have enough clusters. Maybe in the future this could be a split
@@ -1191,7 +1189,7 @@ class Index:
                     )[:n_dissolve]
                 )
                 self.logger.info(
-                    f"Dissolving low objective clusters: {dissolve_cluster_ids}"
+                    f"Dissolving {len(dissolve_cluster_ids)} low objective clusters"
                 )
             else:
                 dissolve_cluster_ids = set()
