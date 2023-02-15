@@ -339,6 +339,13 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 def model(
     index_db, iterations, clusters, min_docs, restart, include_field, random_seed
 ):
+    """
+    Create or refine a new feature cluster model on the given index.
+
+    Note that n_clusters can be changed arbitrarily, even when not initialising a new
+    model with --restart.
+
+    """
     doc_index = hyperreal.index.Index(index_db, random_seed=random_seed)
 
     # Check if any clusters exist.
@@ -365,7 +372,7 @@ def model(
         )
 
     click.echo(f"Refining for {iterations} iterations on {index_db}.")
-    doc_index.refine_clusters(iterations=iterations)
+    doc_index.refine_clusters(iterations=iterations, target_clusters=clusters)
 
 
 @cli.command()

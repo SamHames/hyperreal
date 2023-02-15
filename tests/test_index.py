@@ -4,8 +4,10 @@ concrete corpus objects.
 
 """
 import collections
+import concurrent.futures as cf
 import csv
 import heapq
+import multiprocessing as mp
 import pathlib
 import random
 import shutil
@@ -268,29 +270,37 @@ def test_create_new_features(example_index_corpora_path):
 
 @pytest.mark.parametrize("n_clusters", [4, 8, 16])
 def test_fixed_seed(example_index_path, n_clusters):
-    """Test creation of a model (the core numerical component!)."""
-    index = hyperreal.index.Index(example_index_path, random_seed=10)
+    """
+    Test creation of a model (the core numerical component!).
 
-    index.initialise_clusters(n_clusters)
-    index.refine_clusters(iterations=1)
+    Note that byte for byte repeatability is only guaranteed with a single
+    worker processing pool, as currently there is a dependency on the order
+    of operations - this might be fixed in the future.
 
-    clustering_1 = index.top_cluster_features()
-    index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
-    refined_clustering_1 = index.top_cluster_features()
+    """
+    with cf.ProcessPoolExecutor(1, mp_context=mp.get_context("spawn")) as pool:
+        index = hyperreal.index.Index(example_index_path, random_seed=10, pool=pool)
 
-    # Note we need to initialise a new object with the random seed, otherwise
-    # as each random operation consumes items from the stream.
-    index = hyperreal.index.Index(example_index_path, random_seed=10)
+        index.initialise_clusters(n_clusters)
+        index.refine_clusters(iterations=1)
 
-    index.initialise_clusters(n_clusters)
-    index.refine_clusters(iterations=1)
+        clustering_1 = index.top_cluster_features()
+        index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
+        refined_clustering_1 = index.top_cluster_features()
 
-    clustering_2 = index.top_cluster_features()
-    index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
-    refined_clustering_2 = index.top_cluster_features()
+        # Note we need to initialise a new object with the random seed, otherwise
+        # as each random operation consumes items from the stream.
+        index = hyperreal.index.Index(example_index_path, random_seed=10, pool=pool)
 
-    assert clustering_1 == clustering_2
-    assert refined_clustering_1 == refined_clustering_2
+        index.initialise_clusters(n_clusters)
+        index.refine_clusters(iterations=1)
+
+        clustering_2 = index.top_cluster_features()
+        index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
+        refined_clustering_2 = index.top_cluster_features()
+
+        assert clustering_1 == clustering_2
+        assert refined_clustering_1 == refined_clustering_2
 
 
 def test_splitting(example_index_path):
@@ -306,6 +316,20 @@ def test_splitting(example_index_path):
         index.refine_clusters(cluster_ids=[cluster_id], target_clusters=2, iterations=1)
 
     assert len(index.cluster_ids) == n_clusters * 2
+
+
+def test_dissolving(example_index_path):
+    """Test dissolving clusters, reducing the available cluster count."""
+    index = hyperreal.index.Index(example_index_path)
+
+    n_clusters = 16
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=10)
+
+    assert len(index.cluster_ids) == n_clusters
+
+    index.refine_clusters(iterations=4, target_clusters=12)
+    assert len(index.cluster_ids) == 12
 
 
 def test_filling_empty_clusters(example_index_path):
