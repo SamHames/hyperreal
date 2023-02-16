@@ -315,6 +315,7 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 @click.option(
     "--clusters",
     default=None,
+    type=click.INT,
     help="The number of clusters to use in the model. "
     "Ignored unless this is the first run, or --restart is passed. "
     "If not provided in those cases it will default to 64. ",

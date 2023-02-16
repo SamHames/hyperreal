@@ -179,14 +179,19 @@ class ClusterOverview:
         self,
         index_id,
         cluster_id=None,
-        target_clusters="10",
+        target_clusters=None,
         iterations="10",
         return_to="cluster",
         minimum_cluster_features="1",
     ):
+        if target_clusters:
+            target_clusters = int(target_clusters)
+        else:
+            target_clusters = None
+
         cherrypy.request.index.refine_clusters(
             cluster_ids=cherrypy.request.params["cluster_id"],
-            target_clusters=int(target_clusters),
+            target_clusters=target_clusters,
             minimum_cluster_features=int(minimum_cluster_features),
             iterations=int(iterations),
         )
@@ -414,9 +419,13 @@ class Index:
         Refine the existing model for the given number of iterations.
 
         """
+        if target_clusters:
+            target_clusters = int(target_clusters)
+        else:
+            target_clusters = None
         cherrypy.request.index.refine_clusters(
             iterations=int(iterations),
-            target_clusters=int(target_clusters) or None,
+            target_clusters=target_clusters,
             minimum_cluster_features=int(minimum_cluster_features),
         )
 
