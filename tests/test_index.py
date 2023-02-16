@@ -7,6 +7,7 @@ import collections
 import concurrent.futures as cf
 import csv
 import heapq
+import logging
 import multiprocessing as mp
 import pathlib
 import random
@@ -344,6 +345,24 @@ def test_filling_empty_clusters(example_index_path):
     index.refine_clusters(iterations=3, target_clusters=12)
 
     assert len(index.cluster_ids) == 12
+
+
+def test_termination(example_index_path, caplog):
+    """Test"""
+    index = hyperreal.index.Index(example_index_path)
+
+    n_clusters = 8
+    index.initialise_clusters(n_clusters)
+
+    with caplog.at_level(logging.INFO):
+        index.refine_clusters(iterations=100)
+        assert len(index.cluster_ids) == n_clusters
+
+        for record in caplog.records:
+            if "Terminating" in record.message:
+                break
+        else:
+            assert False
 
 
 def test_pinning_features(example_index_path):

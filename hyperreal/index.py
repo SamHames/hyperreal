@@ -968,60 +968,6 @@ class Index:
             )
         )[0][0]
 
-    def _calculate_assignments(
-        self, group_features, group_checks, probe_query: Optional[AbstractBitMap] = None
-    ):
-        """
-        Determine the assignments of features to clusters given these features groups.
-
-        This is a building block of the various iterations of refinement operations.
-
-        group_features: a mapping of group_keys to lists of features in that group.
-        group_checks: a mapping of group keys to the features to be check against
-            that group.
-
-        """
-
-        # Dispatch the comparisons that involve the most features first, as they will
-        # likely take the longest.
-        check_order = sorted(
-            (
-                (
-                    self.db_path,
-                    group_key,
-                    features,
-                    group_checks[group_key],
-                    probe_query,
-                )
-                for group_key, features in group_features.items()
-                if group_key in group_checks
-            ),
-            key=lambda x: len(x[2]) + len(x[3]),
-            reverse=True,
-        )
-
-        futures = [
-            self.pool.submit(measure_features_to_feature_group, *c) for c in check_order
-        ]
-
-        total_objective = 0
-        assignments = collections.defaultdict(lambda: (-math.inf, -1))
-
-        for f in cf.as_completed(futures):
-            result = f.result()
-
-            if result is None:
-                continue
-            else:
-                group_key, check_features, delta, already_in, objective = result
-
-            total_objective += objective
-
-            for feature, delta in zip(check_features, delta):
-                assignments[feature] = max(assignments[feature], (delta, group_key))
-
-        return assignments, total_objective
-
     def _refine_feature_groups(
         self,
         cluster_feature: dict[Hashable, set[int]],
@@ -1031,7 +977,7 @@ class Index:
         pinned_features: Optional[Iterable[int]] = None,
         probe_query: Optional[AbstractBitMap] = None,
         max_clusters: Optional[int] = None,
-        terminate_obj_tolerance: float = 0.001,
+        tolerance: float = 0.001,
     ) -> dict[Hashable, set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
@@ -1058,11 +1004,16 @@ class Index:
         objective will be dissolved. Dissolves will be conducted evenly per
         iteration, rather than all at once.
 
-        terminate_obj_tolerance: specifies a termination tolerance after an
-        iteration, if the relative change in the objective is less than this
-        the algorithm will terminate early.
+        tolerance: specifies a termination tolerance. If the relative change
+        in objective is less than this after an iteration, or if fewer than
+        this fraction of non-pinned features moves during an iteration,
+        terminate early.
 
         """
+
+        # If cluster_feature is empty, return immediately
+        if not len(cluster_feature.keys()):
+            return cluster_feature
 
         # Make sure to copy the input dict
         cluster_feature = {
@@ -1101,6 +1052,8 @@ class Index:
 
         current_cluster_scores = {}
         changed_clusters = set(cluster_feature)
+
+        prev_obj = 0
 
         for iteration in range(iterations):
             # Prepation phase: handle empty/too small clusters, but taking
@@ -1192,6 +1145,16 @@ class Index:
                     f"Dissolving {len(dissolve_cluster_ids)} low objective clusters"
                 )
             else:
+                # Note that we only check the objective if there are no more
+                # clusters to dissolve: otherwise we could leave the index in
+                # an unexpected state.
+                obj_delta = total_objective - prev_obj
+                prev_obj = total_objective
+                if (obj_delta / total_objective) < tolerance:
+                    self.logger.info(
+                        "Terminating refinement due to small change in the objective."
+                    )
+                    break
                 dissolve_cluster_ids = set()
 
             assigned_cluster_ids -= dissolve_cluster_ids
@@ -1323,6 +1286,13 @@ class Index:
             for cluster_id in dissolve_cluster_ids:
                 del current_cluster_scores[cluster_id]
                 del cluster_feature[cluster_id]
+
+            if not dissolve_cluster_ids:
+                if (len(changed_features) / len(movable_features)) < tolerance:
+                    self.logger.info(
+                        "Terminating refinement due to small number of feature moves."
+                    )
+                    break
 
             self.logger.info(
                 f"Finished iteration {iteration + 1}/{iterations}, {len(changed_clusters)} changed clusters, {len(changed_features)} features"
