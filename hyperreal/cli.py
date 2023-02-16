@@ -314,9 +314,11 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 @click.option("--iterations", default=10)
 @click.option(
     "--clusters",
-    default=64,
+    default=None,
+    type=click.INT,
     help="The number of clusters to use in the model. "
-    "Ignored unless this is the first run, or --restart is passed.",
+    "Ignored unless this is the first run, or --restart is passed. "
+    "If not provided in those cases it will default to 64. ",
 )
 @click.option("--min-docs", default=100)
 @click.option(
@@ -339,6 +341,13 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 def model(
     index_db, iterations, clusters, min_docs, restart, include_field, random_seed
 ):
+    """
+    Create or refine a new feature cluster model on the given index.
+
+    Note that n_clusters can be changed arbitrarily, even when not initialising a new
+    model with --restart.
+
+    """
     doc_index = hyperreal.index.Index(index_db, random_seed=random_seed)
 
     # Check if any clusters exist.
@@ -346,6 +355,8 @@ def model(
 
     if has_clusters:
         if restart:
+            # If the number of clusters isn't explicitly set.
+            clusters = clusters or 64
             click.echo(
                 f"Restarting new feature cluster model with {clusters} clusters on {index_db}."
             )
@@ -355,6 +366,8 @@ def model(
                 include_fields=include_field or None,
             )
     else:
+        # If the number of clusters isn't explicitly set.
+        clusters = clusters or 64
         click.echo(
             f"Creating new feature cluster model with {clusters} clusters on {index_db}."
         )
@@ -365,7 +378,7 @@ def model(
         )
 
     click.echo(f"Refining for {iterations} iterations on {index_db}.")
-    doc_index.refine_clusters(iterations=iterations)
+    doc_index.refine_clusters(iterations=iterations, target_clusters=clusters)
 
 
 @cli.command()
