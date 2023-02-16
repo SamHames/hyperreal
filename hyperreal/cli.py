@@ -314,9 +314,10 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 @click.option("--iterations", default=10)
 @click.option(
     "--clusters",
-    default=64,
+    default=None,
     help="The number of clusters to use in the model. "
-    "Ignored unless this is the first run, or --restart is passed.",
+    "Ignored unless this is the first run, or --restart is passed. "
+    "If not provided in those cases it will default to 64. ",
 )
 @click.option("--min-docs", default=100)
 @click.option(
@@ -353,6 +354,8 @@ def model(
 
     if has_clusters:
         if restart:
+            # If the number of clusters isn't explicitly set.
+            clusters = clusters or 64
             click.echo(
                 f"Restarting new feature cluster model with {clusters} clusters on {index_db}."
             )
@@ -362,6 +365,8 @@ def model(
                 include_fields=include_field or None,
             )
     else:
+        # If the number of clusters isn't explicitly set.
+        clusters = clusters or 64
         click.echo(
             f"Creating new feature cluster model with {clusters} clusters on {index_db}."
         )
