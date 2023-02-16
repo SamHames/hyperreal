@@ -1221,15 +1221,18 @@ class Index:
                     if c not in dissolve_cluster_ids
                 }
 
-            futures = set()
-            for c, comp_features in comparison_features.items():
-                futures.add(
+            # Implementation detail: we're going to make this deterministic,
+            # by processing return values in the order than they were submitted,
+            # and *not* in the order they complete!
+            futures = []
+            for c in sorted(comparison_features):
+                futures.append(
                     self.pool.submit(
                         measure_add_features_to_cluster,
                         self.db_path,
                         c,
                         current_cluster_scores[c][0],
-                        comp_features,
+                        comparison_features[c],
                         probe_query,
                     )
                 )
@@ -1253,7 +1256,9 @@ class Index:
             for cluster_id in dissolve_cluster_ids:
                 changed_features |= cluster_feature[cluster_id]
 
-            for f in cf.as_completed(futures):
+            # Implementation note: cf.as_completed(futures) might be faster,
+            # but is not deterministic like we'd want.
+            for f in futures:
                 test_cluster, feature_array, delta_array = f.result()
 
                 # Note that we're not accumulating to the best possible score here!
@@ -1905,7 +1910,7 @@ def measure_add_features_to_cluster(
 
         # PHASE 2: Incremental delta from adding new features to the cluster.
         # Note: using an array to only manage two objects worth of de/serialisation
-        feature_array = array.array("q", add_features)
+        feature_array = array.array("q", sorted(add_features))
         delta_array = array.array("d", (0 for _ in feature_array))
 
         # All tokens that are adds (not already in the cluster)

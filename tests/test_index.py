@@ -8,7 +8,6 @@ import concurrent.futures as cf
 import csv
 import heapq
 import logging
-import multiprocessing as mp
 import pathlib
 import random
 import shutil
@@ -279,29 +278,29 @@ def test_fixed_seed(example_index_path, n_clusters):
     of operations - this might be fixed in the future.
 
     """
-    with cf.ProcessPoolExecutor(1, mp_context=mp.get_context("spawn")) as pool:
-        index = hyperreal.index.Index(example_index_path, random_seed=10, pool=pool)
 
-        index.initialise_clusters(n_clusters)
-        index.refine_clusters(iterations=1)
+    index = hyperreal.index.Index(example_index_path, random_seed=10)
 
-        clustering_1 = index.top_cluster_features()
-        index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
-        refined_clustering_1 = index.top_cluster_features()
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=1)
 
-        # Note we need to initialise a new object with the random seed, otherwise
-        # as each random operation consumes items from the stream.
-        index = hyperreal.index.Index(example_index_path, random_seed=10, pool=pool)
+    clustering_1 = index.top_cluster_features()
+    index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
+    refined_clustering_1 = index.top_cluster_features()
 
-        index.initialise_clusters(n_clusters)
-        index.refine_clusters(iterations=1)
+    # Note we need to initialise a new object with the random seed, otherwise
+    # as each random operation consumes items from the stream.
+    index = hyperreal.index.Index(example_index_path, random_seed=10)
 
-        clustering_2 = index.top_cluster_features()
-        index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
-        refined_clustering_2 = index.top_cluster_features()
+    index.initialise_clusters(n_clusters)
+    index.refine_clusters(iterations=1)
 
-        assert clustering_1 == clustering_2
-        assert refined_clustering_1 == refined_clustering_2
+    clustering_2 = index.top_cluster_features()
+    index.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
+    refined_clustering_2 = index.top_cluster_features()
+
+    assert clustering_1 == clustering_2
+    assert refined_clustering_1 == refined_clustering_2
 
 
 def test_splitting(example_index_path):
