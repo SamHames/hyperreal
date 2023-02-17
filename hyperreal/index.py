@@ -1011,6 +1011,8 @@ class Index:
 
         """
 
+        max_clusters = max_clusters or len(cluster_feature)
+
         # If cluster_feature is empty, return immediately
         if not len(cluster_feature.keys()):
             return cluster_feature
@@ -1199,15 +1201,22 @@ class Index:
                     )
 
                 # Accumulate the best group to do a detailed check against
-                best_groups = collections.defaultdict(lambda: (-1, (-1,)))
+                best_groups = {}
 
                 for f in cf.as_completed(futures):
                     group_key, feature_array, delta_array = f.result()
 
                     for feature, delta in zip(feature_array, delta_array):
-                        best_groups[feature] = max(
-                            best_groups[feature], (delta, group_key)
-                        )
+                        # Note that we can't use a defaultdict for this, as
+                        # we would need to know the structure of group_key for
+                        # comparison purposes.
+                        try:
+                            best_groups[feature] = max(
+                                best_groups[feature], (delta, group_key)
+                            )
+                        except KeyError:
+                            best_groups[feature] = (delta, group_key)
+
                 # Individual cluster checks against the selected comparison group
                 comparison_features = collections.defaultdict(list)
                 for feature, (_, group_key) in best_groups.items():
@@ -1225,6 +1234,7 @@ class Index:
             # by processing return values in the order than they were submitted,
             # and *not* in the order they complete!
             futures = []
+
             for c in sorted(comparison_features):
                 futures.append(
                     self.pool.submit(
