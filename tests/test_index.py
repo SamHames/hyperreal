@@ -8,6 +8,7 @@ import concurrent.futures as cf
 import csv
 import heapq
 import logging
+import multiprocessing as mp
 import pathlib
 import random
 import shutil
@@ -17,6 +18,13 @@ from pyroaring import BitMap
 import pytest
 
 import hyperreal
+
+
+@pytest.fixture(scope="module")
+def pool():
+    context = mp.get_context("spawn")
+    with cf.ProcessPoolExecutor(mp_context=context) as pool:
+        yield pool
 
 
 @pytest.fixture
@@ -62,10 +70,10 @@ corpora_test_cases = [
 
 
 @pytest.mark.parametrize("corpus,args,kwargs,check_stats", corpora_test_cases)
-def test_indexing(tmp_path, corpus, args, kwargs, check_stats):
+def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     """Test that all builtin corpora can be successfully indexed and queried."""
     c = corpus(*args, **kwargs)
-    i = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c)
+    i = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c, pool=pool)
 
     # These are actually very bad settings, but necessary for checking
     # all code paths and concurrency.
@@ -81,9 +89,9 @@ def test_indexing(tmp_path, corpus, args, kwargs, check_stats):
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
-def test_model_creation(example_index_path, n_clusters):
+def test_model_creation(pool, example_index_path, n_clusters):
     """Test creation of a model (the core numerical component!)."""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     index.initialise_clusters(n_clusters)
     index.refine_clusters(iterations=3)
@@ -99,9 +107,9 @@ def test_model_creation(example_index_path, n_clusters):
     assert 0 == len(index.cluster_ids)
 
 
-def test_model_editing(example_index_path):
+def test_model_editing(example_index_path, pool):
     """Test editing functionality on an index."""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     index.initialise_clusters(16)
 
@@ -153,9 +161,11 @@ def test_model_editing(example_index_path):
     assert len(index.cluster_ids) == 13
 
 
-def test_querying(example_index_corpora_path):
+def test_querying(example_index_corpora_path, pool):
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    index = hyperreal.index.Index(example_index_corpora_path[1], corpus=corpus)
+    index = hyperreal.index.Index(
+        example_index_corpora_path[1], corpus=corpus, pool=pool
+    )
 
     index.initialise_clusters(16)
 
@@ -226,9 +236,9 @@ def test_require_corpus(example_index_corpora_path):
     assert len(query) == len(list(index_wi_corpus.docs(query)))
 
 
-def test_pivoting(example_index_path):
+def test_pivoting(example_index_path, pool):
     """Test pivoting by features and by clusters."""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     index.initialise_clusters(16)
 
@@ -248,10 +258,12 @@ def test_pivoting(example_index_path):
                 assert False
 
 
-def test_create_new_features(example_index_corpora_path):
+def test_create_new_features(example_index_corpora_path, pool):
     """Test creating new features - possibly from old features."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    index = hyperreal.index.Index(example_index_corpora_path[1], corpus=corpus)
+    index = hyperreal.index.Index(
+        example_index_corpora_path[1], corpus=corpus, pool=pool
+    )
 
     new_feature = index[("text", "the")] & index[("text", "and")]
     new_feature_key = ("custom", "arbitrary new feature")
@@ -269,7 +281,7 @@ def test_create_new_features(example_index_corpora_path):
 
 
 @pytest.mark.parametrize("n_clusters", [4, 8, 16])
-def test_fixed_seed(example_index_path, n_clusters):
+def test_fixed_seed(example_index_path, pool, n_clusters):
     """
     Test creation of a model (the core numerical component!).
 
@@ -279,7 +291,7 @@ def test_fixed_seed(example_index_path, n_clusters):
 
     """
 
-    index = hyperreal.index.Index(example_index_path, random_seed=10)
+    index = hyperreal.index.Index(example_index_path, random_seed=10, pool=pool)
 
     index.initialise_clusters(n_clusters)
     index.refine_clusters(iterations=1)
@@ -303,9 +315,9 @@ def test_fixed_seed(example_index_path, n_clusters):
     assert refined_clustering_1 == refined_clustering_2
 
 
-def test_splitting(example_index_path):
+def test_splitting(example_index_path, pool):
     """Test splitting and saving splits works correctly"""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     n_clusters = 16
     index.initialise_clusters(n_clusters)
@@ -318,9 +330,9 @@ def test_splitting(example_index_path):
     assert len(index.cluster_ids) == n_clusters * 2
 
 
-def test_dissolving(example_index_path):
+def test_dissolving(example_index_path, pool):
     """Test dissolving clusters, reducing the available cluster count."""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     n_clusters = 16
     index.initialise_clusters(n_clusters)
@@ -332,9 +344,9 @@ def test_dissolving(example_index_path):
     assert len(index.cluster_ids) == 12
 
 
-def test_filling_empty_clusters(example_index_path):
+def test_filling_empty_clusters(example_index_path, pool):
     """Test expanding the number of clusters by subdividing the largest."""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     n_clusters = 8
     index.initialise_clusters(n_clusters)
@@ -346,9 +358,9 @@ def test_filling_empty_clusters(example_index_path):
     assert len(index.cluster_ids) == 12
 
 
-def test_termination(example_index_path, caplog):
+def test_termination(example_index_path, caplog, pool):
     """Test"""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     n_clusters = 8
     index.initialise_clusters(n_clusters)
@@ -364,9 +376,9 @@ def test_termination(example_index_path, caplog):
             assert False
 
 
-def test_pinning_features(example_index_path):
+def test_pinning_features(example_index_path, pool):
     """Test expanding the number of clusters by subdividing the largest."""
-    index = hyperreal.index.Index(example_index_path)
+    index = hyperreal.index.Index(example_index_path, pool=pool)
 
     n_clusters = 8
     index.initialise_clusters(n_clusters)
