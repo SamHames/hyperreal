@@ -85,16 +85,13 @@ class Cluster:
         if feature_id is not None:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
-            print(len(query))
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
             if query:
                 query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
-                print(len(query))
             else:
                 query = cherrypy.request.index.cluster_docs(filter_cluster_id)
-                print(len(query))
 
         if query:
             sorted_features = cherrypy.request.index.pivot_clusters_by_query(
@@ -123,6 +120,8 @@ class Cluster:
 
         total_docs = len(retrieve_docs)
 
+        pinned = int(cluster_id in cherrypy.request.index.pinned_cluster_ids)
+
         return template.render(
             cluster_id=cluster_id,
             highlight_feature_id=feature_id,
@@ -133,6 +132,7 @@ class Cluster:
             total_docs=total_docs,
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
+            pinned=pinned,
         )
 
 

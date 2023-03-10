@@ -833,6 +833,15 @@ class Index:
             )
         ]
 
+    @property
+    def pinned_cluster_ids(self):
+        return {
+            r[0]
+            for r in self.db.execute(
+                "select cluster_id from cluster where pinned order by cluster_id"
+            )
+        }
+
     @atomic()
     def top_cluster_features(self, top_k=20):
         """Return the top_k features according to the number of matching documents."""
@@ -1375,11 +1384,7 @@ class Index:
         # Remove pinned clusters from refinement. Note we do this after
         # creating empty clusters because a pinned cluster still needs to be
         # counted.
-        pinned_clusters = {
-            r[0] for r in self.db.execute("select cluster_id from cluster where pinned")
-        }
-
-        for cluster_id in pinned_clusters:
+        for cluster_id in self.pinned_cluster_ids:
             del cluster_feature[cluster_id]
 
         cluster_feature = self._refine_feature_groups(
