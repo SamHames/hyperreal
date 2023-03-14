@@ -4,6 +4,7 @@ Cherrypy based webserver for serving an index (or in future) a set of indexes.
 """
 import csv
 import io
+import math
 import os
 from urllib.parse import parse_qsl
 
@@ -11,7 +12,6 @@ import cherrypy
 from jinja2 import PackageLoader, Environment, select_autoescape
 
 import hyperreal.index
-import hyperreal.utilities
 
 
 templates = Environment(
@@ -272,7 +272,7 @@ class Index:
         feature_id=None,
         cluster_id=None,
         exemplar_docs="5",
-        top_k_features="20",
+        top_k_features="40",
         scoring="jaccard",
     ):
         template = templates.get_template("index.html")
@@ -301,15 +301,14 @@ class Index:
             highlight_feature_id = int(feature_id)
 
         elif cluster_id is not None:
-            query, bitslice = cherrypy.request.index.cluster_query(int(cluster_id))
+            query = cherrypy.request.index.cluster_docs(int(cluster_id))
             clusters = cherrypy.request.index.pivot_clusters_by_query(
                 query, scoring=scoring, top_k=int(top_k_features)
             )
 
             if cherrypy.request.index.corpus is not None:
-                ranked = hyperreal.utilities.bstm(query, bitslice, int(exemplar_docs))
                 rendered_docs = cherrypy.request.index.render_docs(
-                    ranked, random_sample_size=int(exemplar_docs)
+                    query, random_sample_size=int(exemplar_docs)
                 )
 
             total_docs = len(query)

@@ -10,23 +10,27 @@
     <style type="text/css">
 
 .cluster-list {
-    display: inline-block;
+    display: flex;
+    flex-wrap: wrap;
     list-style-type: none;
     padding-left: 0;
-    max-width: 80em;
 }
 
 .cluster-list > li {
-    margin: 2em 1em;
-    box-shadow: 0 0 0.2em 0.1em gray;
+    flex: 1 1 40ch;
+    margin: 1em;
+    box-shadow: 0 0 0.1em 0.1em gray;
+    border-radius: 0.4em;
 }
 
 .highlight {
     border: 0.2em solid orange;
+    border-radius: 0.4em;
 }
 
 .cluster-list li {
     padding-left: 0;
+    background: #f6f6f6;
 }
 
 .compact-cluster {
@@ -46,9 +50,8 @@
 .cluster-header {
     background: black;
     color: white;
+    border-radius: 0.4em 0.4em 0 0;
 }
-
-.feature-link { text-decoration: none; }
 
 .doc-list {
     padding-left: 0;
@@ -56,10 +59,10 @@
 .doc-list > li{
     margin: 1em;
     border-left: 0.5em solid grey;
-    background-color: #eee;
+    background-color: white;
     list-style-type: none;
     padding: 0.5em;
-
+    border-radius: 0.4em;
 }
 
 img {
@@ -67,26 +70,39 @@ img {
 }
 
 .feature {
-  border: 0.1em solid black;
-  border-radius: 0.2em;
-  display: inline-block;
-  margin: 0 0.5em;
+    position: relative;
+    box-shadow: 0.05em 0.05em 0.05em 0.05em gray;
+    border-radius: 0.4em;
+    display: inline-block;
+    margin: 0;
+    min-width: 4.5ch;
+    background: white;
+
 }
 
 .field {
-  background: black;
-  color: white;
-  height:  100%;
-  padding: 0 0.5em;
+    position: absolute;
+    left: 0.1em;
+    top: 0.1em;
+    color: black;
+    padding: 0.1em;
+    margin: 0;
+    font-size: 50%;
 }
 
 .value {
-    padding: 0 0.5em;
+    padding: 0.75em 0.5em;
+    text-align: center;
 }
 
 .score {
     color: black;
-    font-size: 60%;
+    font-size: 50%;
+    padding: 0.1em;
+    position: absolute;
+    right: 0.1em;
+    bottom: 0.1em;
+    display: table-cell;
 }
 
 table {
@@ -99,7 +115,7 @@ thead {
     border-bottom: 0.1em solid black;
 }
 
-tbody > tr:nth-child(odd) {background: #eee}
+tbody > tr:nth-child(odd) {background: #f6f6f6}
 
 th {
     padding: 0.5em;

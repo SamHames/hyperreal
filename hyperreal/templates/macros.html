@@ -1,10 +1,10 @@
 {% macro render_feature(index_id, cluster_id, feature_id, field, value, score, context, highlight_feature_id=None) %}
 <div {% if feature_id == highlight_feature_id %}class="highlight"{% endif %}>
-    <a class="feature-link" href="/index/{{ index_id }}/{{ 'cluster/{}/'.format(cluster_id) if context =='cluster' }}?feature_id={{ feature_id }}">
+    <a href="/index/{{ index_id }}/{{ 'cluster/{}/'.format(cluster_id) if context =='cluster' }}?feature_id={{ feature_id }}">
         <div class="feature">
             <span class="field">{{ field }}</span>
-            <span class="value">{{ value }}</span>
-            <span class="score">{{ ("{0:0.2f}" if score <= 1.0 else "{0:g}").format(score) }}</span>
+            <div class="value">{{ value }}</div>
+            <span class="score">{{ ("{:.2e}").format(score) }}</span>
         </div>
     </a>
 </div>
@@ -12,9 +12,9 @@
 
 
 {% macro render_cluster(index_id, cluster_id, features, cluster_score=None, highlight_cluster_id=None, highlight_feature_id=None, context='index') -%}
-<div {% if cluster_id == highlight_cluster_id %}class="highlight"{% endif %}>
+<div class="feature-cluster {% if cluster_id == highlight_cluster_id %}highlight{% endif %}">
     <div class="cluster-header">
-        Cluster {{ cluster_id }} {% if cluster_score is not none %}- {{ ("{0:0.2f}" if cluster_score <= 1.0 else "{0:g}").format(cluster_score) }}{% endif %}
+        Cluster {{ cluster_id }} {% if cluster_score is not none %}- {{ "{:.2e}".format(cluster_score) }}{% endif %}
     </div>
     <ul class="compact-cluster">
         {% for feature_id, field, value, score in features %}
