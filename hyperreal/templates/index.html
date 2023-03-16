@@ -45,7 +45,7 @@
     {% if rendered_docs %}
     <li>
         <div class="cluster-header">
-            {% if rendered_docs|length < total_docs %}Random sample of {{ total_docs }} matching documents.{% else %}All {{ total_docs }} matching documents.{% endif %}
+            {% if rendered_docs|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
         </div>
         <ul class="doc-list">
             {% for doc_id, doc in rendered_docs %}

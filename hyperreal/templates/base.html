@@ -9,18 +9,24 @@
 
     <style type="text/css">
 
+body {
+    margin: 0 1em;
+}
+
 .cluster-list {
     display: flex;
     flex-wrap: wrap;
     list-style-type: none;
-    padding-left: 0;
+    padding: 0;
+    margin: 0 -0.5em;
 }
 
 .cluster-list > li {
     flex: 1 1 40ch;
-    margin: 1em;
+    margin: 0.5em;
     box-shadow: 0 0 0.1em 0.1em gray;
     border-radius: 0.4em;
+    justify-content: space-between;
 }
 
 .highlight {
@@ -30,35 +36,39 @@
 
 .cluster-list li {
     padding-left: 0;
-    background: #f6f6f6;
+    background: #f0f0f0;
 }
 
 .compact-cluster {
     max-width: 80em;
-    margin: 1em;
-    padding: 0.5em;
-    padding-left: 0;
+    margin: 0.25em;
+    padding: 0;
 }
 
 .compact-cluster li {
     display: inline-block;
     list-style-type: none;
     margin: 0.25em;
-    padding-left: 0;
+    padding: 0;
+}
+
+.cluster-footer {
+    margin: 1em 0.5em;
 }
 
 .cluster-header {
     background: black;
     color: white;
     border-radius: 0.4em 0.4em 0 0;
+    padding: 0 0.5em;
 }
 
 .doc-list {
-    padding-left: 0;
+    padding: 0;
 }
+
 .doc-list > li{
-    margin: 1em;
-    border-left: 0.5em solid grey;
+    margin: 0.75em 0.5em;
     background-color: white;
     list-style-type: none;
     padding: 0.5em;
