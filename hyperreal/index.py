@@ -877,7 +877,12 @@ class Index:
 
         """
 
-        cluster_ids = cluster_ids or self.cluster_ids
+        cluster_ids = cluster_ids or [
+            r[0]
+            for r in self.db.execute(
+                "select cluster_id from cluster order by feature_count desc"
+            )
+        ]
 
         if scoring == "jaccard":
             work = [
@@ -886,6 +891,7 @@ class Index:
             pivoted = (
                 r for r in self.pool.map(_pivot_cluster_by_query_jaccard, work) if r[1]
             )
+
         elif scoring == "chi_squared":
             N = list(self.db.execute("select count(*) from doc_key"))[0][0]
             work = [
