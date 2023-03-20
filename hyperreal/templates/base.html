@@ -10,7 +10,7 @@
     <style type="text/css">
 
 body {
-    margin: 0 1em;
+    margin: 0 3em;
 }
 
 .cluster-list {
@@ -23,7 +23,7 @@ body {
 
 .cluster-list > li {
     flex: 1 1 40ch;
-    margin: 0.5em;
+    margin: 1em 0.5em;
     box-shadow: 0 0 0.1em 0.1em gray;
     border-radius: 0.4em;
     justify-content: space-between;
@@ -41,7 +41,7 @@ body {
 
 .compact-cluster {
     max-width: 80em;
-    margin: 0.5em;
+    margin: 0.25em;
     padding: 0;
     display: flex;
     flex-wrap: wrap;
@@ -49,8 +49,9 @@ body {
 }
 
 .compact-cluster li {
+    display: inline-block;
     list-style-type: none;
-    margin: 0.375em;
+    margin: 0.25em;
     padding: 0;
 }
 
@@ -91,6 +92,7 @@ img {
     border-radius: 0.4em;
     display: inline-block;
     margin: 0;
+    margin-bottom: 0.5em;
     min-width: 4.5ch;
     background: white;
 
@@ -151,6 +153,28 @@ form {
     max-width: 80em;
 }
 
+.nav-links {
+    display: flex;
+    list-style-type: none;
+    margin-bottom: 1em;
+    margin-top: 0em;
+    padding-left: 0;
+}
+
+.nav-links li {
+    margin-right: 1em;
+}
+
+nav, h1 {
+    display: inline-block;
+}
+
+h1 {
+    margin-bottom: 1rem;
+    margin-right: 1rem;
+}
+
+
     </style>
 
     {% block meta %}
@@ -161,10 +185,10 @@ form {
     <header>
         <h1><a href="/">Feature Clustering</a></h1>
         <nav>
-        <ul>
-        {% block nav %}
-        {% endblock %}
-        </ul>
+            <ul class="nav-links">
+            {% block nav %}
+            {% endblock %}
+            </ul>
         </nav>
     </header>
     <main>{% block content %}{% endblock %}</main>
