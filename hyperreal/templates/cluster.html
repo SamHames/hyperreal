@@ -45,6 +45,17 @@
         </fieldset>
     </form>
 
+    {% if visible_features %}
+    <form method="post" action="/index/{{ index_id }}/cluster/create">
+        <fieldset>
+            {% for feature_id in visible_features %}
+            <input type="hidden" name="feature_id" value={{ feature_id }}>
+            {% endfor %}
+            <button type="submit">Create New Cluster From All Visible Features</button>
+        </fieldset>
+    </form>
+    {% endif %}
+
     <form method="post" action="/index/{{ index_id }}/cluster/pin">
         <fieldset>
             <input type="hidden" name="return_to" value="cluster">
@@ -53,6 +64,15 @@
             <button class="inline-button" type="submit">{{ 'Unpin cluster' if pinned else 'Pin cluster'}}</button>
         </fieldset>
     </form>
+
+    {% if visible_features %}
+    <form method="post" action="/index/{{ index_id }}/cluster/create">
+        {% for feature_id in visible_features %}
+        <input type="hidden" name="feature_id" value={{ feature_id }}>
+        {% endfor %}
+        <button type="submit">Create New Cluster From All Visible Features</button>
+    </form>
+    {% endif %}
 
     <form method="post" action="/index/{{ index_id }}/cluster/refine">
         <fieldset>
