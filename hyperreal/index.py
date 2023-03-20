@@ -992,7 +992,7 @@ class Index:
         pinned_features: Optional[Iterable[int]] = None,
         probe_query: Optional[AbstractBitMap] = None,
         max_clusters: Optional[int] = None,
-        tolerance: float = 0.001,
+        tolerance: float = 0.01,
     ) -> dict[Hashable, set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
@@ -1019,10 +1019,11 @@ class Index:
         objective will be dissolved. Dissolves will be conducted evenly per
         iteration, rather than all at once.
 
-        tolerance: specifies a termination tolerance. If the relative change
-        in objective is less than this after an iteration, or if fewer than
-        this fraction of non-pinned features moves during an iteration,
-        terminate early.
+        tolerance: specifies a termination tolerance. If fewer than
+        tolerance * total_features features move in an iteration, terminate
+        early. The default is set at 0.01, or 1% - the model is considered
+        converged if less than 1% of the features have moved during an
+        iteration.
 
         """
 
@@ -1036,6 +1037,12 @@ class Index:
         cluster_feature = {
             cluster_id: features.copy()
             for cluster_id, features in cluster_feature.items()
+        }
+
+        feature_cluster = {
+            feature_id: cluster_id
+            for cluster_id, features in cluster_feature.items()
+            for feature_id in features
         }
 
         pinned_features = set(pinned_features) if pinned_features else set()
@@ -1053,6 +1060,15 @@ class Index:
             for f in features
             if f not in pinned_features
         }
+
+        movable_feature_list = list(movable_features)
+
+        # Used to determine the size of newly sampled clusters when filling in
+        # too-small clusters.
+        self.logger.info(f"{len(movable_features)}, {2 * max_clusters}")
+        sample_cluster_size = max(
+            minimum_cluster_features, len(movable_features) // (2 * max_clusters)
+        )
 
         # Use initial cluster ids to keep track of whether any clusters
         # are fully emptied out and can be used to split larger clusters up.
@@ -1077,54 +1093,54 @@ class Index:
             # into account possible dissolves as well. Note that we should
             # only drop a cluster_id that was dissolved on the last
             # iteration - this allows us to be incremental in our approach.
-            current_cluster_ids = {
-                cluster_id
-                for cluster_id, values in cluster_feature.items()
-                # Keep every cluster above the minimum size, or if it has a pinned feature
-                if len(values) >= minimum_cluster_features or values & pinned_features
-            }
 
-            too_small_cluster_ids = assigned_cluster_ids - current_cluster_ids
+            # NOTE: this stage is recursive, because sampling of features could end
+            # end up emptying another cluster as well.
+            while True:
+                current_cluster_ids = {
+                    cluster_id
+                    for cluster_id, values in cluster_feature.items()
+                    # Keep every cluster above the minimum size, or if it has a pinned feature
+                    if len(values) >= minimum_cluster_features
+                    or values & pinned_features
+                }
 
-            # Actually dissolve the clusters from the model.
-            for cluster_id in too_small_cluster_ids:
-                cluster_feature[cluster_id] = set()
+                # Note the list is so the order is deterministic
+                too_small_cluster_ids = sorted(
+                    assigned_cluster_ids - current_cluster_ids
+                )
 
-            if too_small_cluster_ids:
-                logger.info(f"Filling {len(too_small_cluster_ids)} too-small clusters.")
-
-            # The logic here is to: split the largest cluster recursively until
-            # we have enough clusters. Maybe in the future this could be a split
-            # and refine clustering instead of a simple random split?
-            while too_small_cluster_ids:
-                # Split the biggest cluster in two.
-                n_features, split_id = max(
-                    (
-                        (len(c_features), cluster_id)
-                        for cluster_id, c_features in cluster_feature.items()
+                if too_small_cluster_ids:
+                    self.logger.info(
+                        f"Filling {len(too_small_cluster_ids)} too-small clusters."
                     )
-                )
 
-                small_id = too_small_cluster_ids.pop()
+                    for cluster_id in too_small_cluster_ids:
+                        # Empty out the existing cluster - any features left will be allowed
+                        # to float and assigned to a different cluster.
+                        cluster_feature[cluster_id] = set()
 
-                changed_clusters.add(small_id)
-                changed_clusters.add(split_id)
+                        # Note that we're sampling with replacement, so a feature
+                        # might be moved more than once.
+                        sample = self.random.sample(
+                            movable_feature_list, k=sample_cluster_size
+                        )
 
-                logger.debug(
-                    f"Filling cluster {small_id} by splitting largest "
-                    f"cluster {split_id} with {n_features} features."
-                )
+                        # Actually reassign the features.
+                        for feature_id in sample:
+                            old_cluster = feature_cluster[feature_id]
+                            cluster_feature[old_cluster].discard(feature_id)
+                            cluster_feature[cluster_id].add(feature_id)
+                            feature_cluster[feature_id] = cluster_id
+                            changed_clusters.add(old_cluster)
 
-                # Account for pinned features when splitting clusters - also
-                # account for large numbers of features in a cluster being pinned.
-                to_split = list(cluster_feature[split_id] - pinned_features)
-                sample = self.random.sample(
-                    to_split, min(len(to_split), n_features // 2)
-                )
+                        changed_clusters.add(cluster_id)
 
-                for feature in sample:
-                    cluster_feature[split_id].discard(feature)
-                    cluster_feature[small_id].add(feature)
+                        self.logger.debug(
+                            f"Filled cluster {cluster_id} by sampling {sample_cluster_size} features"
+                        )
+                else:
+                    break
 
             # Compute current feature assignments and contributions to each cluster
             futures = {
@@ -1162,16 +1178,6 @@ class Index:
                     f"Dissolving {len(dissolve_cluster_ids)} low objective clusters"
                 )
             else:
-                # Note that we only check the objective if there are no more
-                # clusters to dissolve: otherwise we could leave the index in
-                # an unexpected state.
-                obj_delta = total_objective - prev_obj
-                prev_obj = total_objective
-                if (obj_delta / total_objective) < tolerance:
-                    self.logger.info(
-                        "Terminating refinement due to small change in the objective."
-                    )
-                    break
                 dissolve_cluster_ids = set()
 
             assigned_cluster_ids -= dissolve_cluster_ids
@@ -1198,12 +1204,14 @@ class Index:
                     group_features = {
                         f for c in group for f in current_cluster_scores[c][0]
                     }
+
                     # Note that we don't test adding the feature to it's own group!
                     comparison_features = {
                         f
                         for c in current_cluster_scores.keys() - set(group)
                         for f in current_cluster_scores[c][0]
                     } - pinned_features
+
                     futures.add(
                         self.pool.submit(
                             measure_add_features_to_cluster,
