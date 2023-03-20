@@ -49,7 +49,16 @@ def test_plaintext_corpus(tmp_path):
 
     # Model
     result = runner.invoke(
-        cli.model, ["--iterations", "10", "--clusters", "10", str(target_index_db)]
+        cli.model,
+        [
+            "--iterations",
+            "10",
+            "--clusters",
+            "10",
+            "--min-docs",
+            "10",
+            str(target_index_db),
+        ],
     )
 
 
@@ -80,7 +89,16 @@ def test_twittersphere_corpus(tmp_path):
 
     # Model
     result = runner.invoke(
-        cli.model, ["--iterations", "10", "--clusters", "10", str(target_index_db)]
+        cli.model,
+        [
+            "--iterations",
+            "10",
+            "--clusters",
+            "10",
+            "--min-docs",
+            "10",
+            str(target_index_db),
+        ],
     )
 
 
