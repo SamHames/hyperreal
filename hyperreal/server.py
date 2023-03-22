@@ -161,7 +161,7 @@ class ClusterOverview:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(feature_id=int)
-    def create(self, index_id, feature_id=None):
+    def create(self, index_id, feature_id=None, **params):
         new_cluster_id = cherrypy.request.index.create_cluster_from_features(
             cherrypy.request.params["feature_id"]
         )
