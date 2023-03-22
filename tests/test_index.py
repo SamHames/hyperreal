@@ -376,12 +376,12 @@ def test_termination(example_index_path, caplog, pool):
             assert False
 
 
-def test_pinning_features(example_index_path, pool):
+def test_pinning(example_index_path, pool):
     """Test expanding the number of clusters by subdividing the largest."""
     index = hyperreal.index.Index(example_index_path, pool=pool)
 
     n_clusters = 8
-    index.initialise_clusters(n_clusters)
+    index.initialise_clusters(n_clusters, min_docs=5)
     index.refine_clusters(iterations=1)
     assert len(index.cluster_ids) == n_clusters
 
@@ -403,3 +403,4 @@ def test_pinning_features(example_index_path, pool):
     index.refine_clusters(iterations=3, target_clusters=16)
 
     assert whole_cluster == {f[0] for f in index.cluster_features(1)}
+    assert len(index.cluster_ids) == 16

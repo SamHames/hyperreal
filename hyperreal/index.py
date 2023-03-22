@@ -1065,7 +1065,6 @@ class Index:
 
         # Used to determine the size of newly sampled clusters when filling in
         # too-small clusters.
-        self.logger.info(f"{len(movable_features)}, {2 * max_clusters}")
         sample_cluster_size = max(
             minimum_cluster_features, len(movable_features) // (2 * max_clusters)
         )
@@ -1075,7 +1074,7 @@ class Index:
         assigned_cluster_ids = set(cluster_feature)
 
         # Work out how many low objective clusters to dissolve on each iteration.
-        dissolve_clusters = len(assigned_cluster_ids) - max_clusters
+        dissolve_clusters = max(0, len(assigned_cluster_ids) - max_clusters)
         # Note that we try to structure it so the very last iteration does not dissolve
         # anything.
         dissolve_per_iteration = math.ceil(dissolve_clusters / max(1, iterations - 1))
@@ -1398,8 +1397,9 @@ class Index:
         # Remove pinned clusters from refinement. Note we do this after
         # creating empty clusters because a pinned cluster still needs to be
         # counted.
-        for cluster_id in self.pinned_cluster_ids:
-            del cluster_feature[cluster_id]
+        pinned_clusters = self.pinned_cluster_ids
+        for cluster_id in pinned_clusters:
+            cluster_feature.pop(cluster_id, None)
 
         cluster_feature = self._refine_feature_groups(
             cluster_feature,
