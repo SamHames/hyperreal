@@ -355,6 +355,11 @@ def model(
 
     if has_clusters:
         if restart:
+            click.confirm(
+                "A model already exists on this index, do you want to delete it?",
+                abort=True,
+            )
+
             # If the number of clusters isn't explicitly set.
             clusters = clusters or 64
             click.echo(
