@@ -1301,10 +1301,10 @@ class Index:
                 for f, d in zip(feature_array, delta_array):
                     score, _, existing_cluster = current_feature_scores[f]
 
-                    # Accept improvements with only a 50% probability. If
-                    # there are multiple improvement options a move is
-                    # therefore more likely.
-                    if d > score and self.random.random() < 0.5:
+                    # Almost greedy choice - the small randomness is to break
+                    # ties and avoid spinning between the same two
+                    # positions.
+                    if d > score and self.random.random() < 0.99:
                         changed_features.add(f)
                         current_feature_scores[f] = (
                             d,
@@ -1816,8 +1816,9 @@ def measure_feature_contribution_to_cluster(
     The contribution is the delta between the objective of the cluster without
     the feature and with the feature.
 
-    This function also has the side effect of calculating the objective
-    contribution for this exact cluster.
+    This function also has the side effect of approximating the objective
+    contribution for this feature in this cluster (assuming moving only that
+    feature).
 
     """
 
@@ -1876,12 +1877,20 @@ def measure_feature_contribution_to_cluster(
             feature_hits = len(docs)
 
             old_hits = hits - feature_hits
-            old_c = c - docs.intersection_cardinality(only_once)
+            only_once_hits = docs.intersection_cardinality(only_once)
+            old_c = c - only_once_hits
+
+            # Check if this feature intersects with any other feature in this cluster
+            intersects_with_other_feature = only_once_hits < feature_hits
 
             # It's okay for the cluster to become empty - we'll just prune it.
-            if old_c:
+            if old_c and intersects_with_other_feature:
                 old_objective = old_hits / (old_c + n_features - 1)
                 delta = objective - old_objective
+
+            # Penalises features that don't intersect with other features in the cluster.
+            elif old_c:
+                delta = -1
             # If it would otherwise be a singleton cluster, just mark it as no change
             else:
                 delta = 0
@@ -1951,11 +1960,17 @@ def measure_add_features_to_cluster(
 
             feature_hits = len(docs)
 
-            new_hits = hits + feature_hits
-            new_c = docs.union_cardinality(cluster_union)
-            new_objective = new_hits / (new_c + n_features + 1)
+            if docs.intersect(cluster_union):
+                new_hits = hits + feature_hits
+                new_c = docs.union_cardinality(cluster_union)
+                new_objective = new_hits / (new_c + n_features + 1)
 
-            delta = new_objective - objective
+                delta = new_objective - objective
+
+            # If the feature doesn't intersect with the cluster at all,
+            # give it a bad delta.
+            else:
+                delta = -1
 
             delta_array[i] = delta
 
