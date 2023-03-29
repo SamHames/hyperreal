@@ -334,8 +334,8 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 )
 @click.option(
     "--tolerance",
-    default=0,
-    type=float,
+    default=0.01,
+    type=click.FloatRange(0, 1),
     help="Specify an early termination tolerance on the fraction of features moving. "
     "If fewer than this fraction of features moves in an iteration, the "
     "refinement will terminate early.",
