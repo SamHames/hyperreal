@@ -1344,6 +1344,7 @@ class Index:
         cluster_ids: Optional[Sequence[int]] = None,
         target_clusters: Optional[int] = None,
         minimum_cluster_features: int = 1,
+        tolerance: float = 0.01,
     ):
         """
         Refine the feature clusters for the current model.
@@ -1408,6 +1409,7 @@ class Index:
             pinned_features=pinned_features,
             minimum_cluster_features=minimum_cluster_features,
             max_clusters=target_clusters,
+            tolerance=tolerance,
         )
 
         # Serialise the actual results of the clustering!

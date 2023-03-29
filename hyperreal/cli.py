@@ -333,13 +333,28 @@ def twittersphere_corpus_serve(corpus_db, index_db):
     "--restart", default=False, is_flag=True, help="Restart the model from scratch."
 )
 @click.option(
+    "--tolerance",
+    default=0,
+    type=float,
+    help="Specify an early termination tolerance on the fraction of features moving. "
+    "If fewer than this fraction of features moves in an iteration, the "
+    "refinement will terminate early.",
+)
+@click.option(
     "--random-seed",
     default=None,
     type=int,
     help="Specify a random seed for a model run. Best used with restart",
 )
 def model(
-    index_db, iterations, clusters, min_docs, restart, include_field, random_seed
+    index_db,
+    iterations,
+    clusters,
+    min_docs,
+    restart,
+    include_field,
+    random_seed,
+    tolerance,
 ):
     """
     Create or refine a new feature cluster model on the given index.
@@ -383,7 +398,9 @@ def model(
         )
 
     click.echo(f"Refining for {iterations} iterations on {index_db}.")
-    doc_index.refine_clusters(iterations=iterations, target_clusters=clusters)
+    doc_index.refine_clusters(
+        iterations=iterations, target_clusters=clusters, tolerance=tolerance
+    )
 
 
 @cli.command()
