@@ -7,14 +7,33 @@
 {% block nav %}
     <li><a href="/index/{{ index_id }}/details">Index Details</a></li>
     <li><a href="/index/{{ index_id }}">Model Overview</a></li>
-    <li><a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">Cluster Overview</a></li>
 {% endblock %}
 
 {% block content %}
 
+<ul class="nav-links">
+    <li><a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">Cluster Overview</a></li>
+    {% if prev_cluster_id or next_cluster_id %}
+    <li><a href="/index/{{ index_id }}/cluster/{{ prev_cluster_id }}">Previous Cluster</li>
+    <li><a href="/index/{{ index_id }}/cluster/{{ next_cluster_id }}">Next Cluster</li>
+    {% endif %}
+    <li><a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot By Cluster</a></li>
+</ul>
+
 <details>
     <summary>Edit this cluster</summary>
 
+    {% if pinned %}
+    <form method="post" action="/index/{{ index_id }}/cluster/pin">
+        <fieldset>
+            <input type="hidden" name="return_to" value="cluster">
+            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
+            <input type="hidden" name="pinned" value="{{ 0 if pinned else 1 }}">
+            <button class="inline-button" type="submit">Unpin Cluster</button>
+        </fieldset>
+    </form>
+
+    {% else %}
     <form method="post" action="/index/{{ index_id }}/feature/remove_from_model">
         <fieldset>
             <label for="feature_selection">Choose features:</label>
@@ -34,6 +53,26 @@
             <input type="hidden" name="return_cluster_id" value="{{ next_cluster_id }}">
             <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
             <button class="inline-button" type="submit">Delete and go to next cluster</button>
+        </fieldset>
+    </form>
+
+    {% if visible_features %}
+    <form method="post" action="/index/{{ index_id }}/cluster/create">
+        <fieldset>
+            {% for feature_id in visible_features %}
+            <input type="hidden" name="feature_id" value={{ feature_id }}>
+            {% endfor %}
+            <button type="submit">Create New Cluster From All Visible Features</button>
+        </fieldset>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/index/{{ index_id }}/cluster/pin">
+        <fieldset>
+            <input type="hidden" name="return_to" value="cluster">
+            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
+            <input type="hidden" name="pinned" value="{{ 0 if pinned else 1 }}">
+            <button class="inline-button" type="submit">Pin Cluster</button>
         </fieldset>
     </form>
 
@@ -58,16 +97,10 @@
         </fieldset>
         <button type="submit">Split Cluster</button>
     </form>
+
+    {% endif %}
 </details>
 
-
-{% if prev_cluster_id or next_cluster_id %}
-<ul>
-    <li><a href="/index/{{ index_id }}/cluster/{{ prev_cluster_id }}">Previous Cluster</li>
-    <li><a href="/index/{{ index_id }}/cluster/{{ next_cluster_id }}">Next Cluster</li>
-    <li><a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot By Cluster</a></li>
-</ul>
-{% endif %}
 <ul class="cluster-list">
     <li>
         {{ render_cluster(index_id, cluster_id, features, highlight_feature_id=highlight_feature_id, context="cluster") }}
@@ -75,7 +108,9 @@
 
     {% if rendered_docs %}
     <li>
-        <p>{% if rendered_docs|length < total_docs %}Sample of the {{ total_docs }} matching documents.{% else %}All {{ total_docs }} matching documents.{% endif %}</p>
+        <div class="cluster-header">
+            {% if rendered_docs|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
+        </div>
         <ul class="doc-list">
             {% for doc_id, doc in rendered_docs %}
             <li>{{ doc }}</li>

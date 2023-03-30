@@ -4,6 +4,7 @@ Cherrypy based webserver for serving an index (or in future) a set of indexes.
 """
 import csv
 import io
+import math
 import os
 from urllib.parse import parse_qsl
 
@@ -11,7 +12,6 @@ import cherrypy
 from jinja2 import PackageLoader, Environment, select_autoescape
 
 import hyperreal.index
-import hyperreal.utilities
 
 
 templates = Environment(
@@ -85,16 +85,13 @@ class Cluster:
         if feature_id is not None:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
-            print(len(query))
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
             if query:
                 query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
-                print(len(query))
             else:
                 query = cherrypy.request.index.cluster_docs(filter_cluster_id)
-                print(len(query))
 
         if query:
             sorted_features = cherrypy.request.index.pivot_clusters_by_query(
@@ -112,8 +109,11 @@ class Cluster:
             # the current cluster.
             retrieve_docs = query & cherrypy.request.index.cluster_docs(cluster_id)
 
+            visible_features = [feature[0] for feature in features]
+
         else:
             retrieve_docs = cherrypy.request.index.cluster_docs(cluster_id)
+            visible_features = None
 
         # Retrieve matching documents if we have a corpus to render them.
         if cherrypy.request.index.corpus is not None:
@@ -122,6 +122,8 @@ class Cluster:
             )
 
         total_docs = len(retrieve_docs)
+
+        pinned = int(cluster_id in cherrypy.request.index.pinned_cluster_ids)
 
         return template.render(
             cluster_id=cluster_id,
@@ -133,6 +135,8 @@ class Cluster:
             total_docs=total_docs,
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
+            pinned=pinned,
+            visible_features=visible_features,
         )
 
 
@@ -157,7 +161,7 @@ class ClusterOverview:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(feature_id=int)
-    def create(self, index_id, feature_id=None, cluster_id=None):
+    def create(self, index_id, feature_id=None, **params):
         new_cluster_id = cherrypy.request.index.create_cluster_from_features(
             cherrypy.request.params["feature_id"]
         )
@@ -272,7 +276,7 @@ class Index:
         feature_id=None,
         cluster_id=None,
         exemplar_docs="5",
-        top_k_features="20",
+        top_k_features="40",
         scoring="jaccard",
     ):
         template = templates.get_template("index.html")
@@ -300,26 +304,34 @@ class Index:
             total_docs = len(query)
             highlight_feature_id = int(feature_id)
 
+            visible_features = [
+                feature[0] for _, _, features in clusters for feature in features
+            ]
+
         elif cluster_id is not None:
-            query, bitslice = cherrypy.request.index.cluster_query(int(cluster_id))
+            query = cherrypy.request.index.cluster_docs(int(cluster_id))
             clusters = cherrypy.request.index.pivot_clusters_by_query(
                 query, scoring=scoring, top_k=int(top_k_features)
             )
 
             if cherrypy.request.index.corpus is not None:
-                ranked = hyperreal.utilities.bstm(query, bitslice, int(exemplar_docs))
                 rendered_docs = cherrypy.request.index.render_docs(
-                    ranked, random_sample_size=int(exemplar_docs)
+                    query, random_sample_size=int(exemplar_docs)
                 )
 
             total_docs = len(query)
             highlight_cluster_id = int(cluster_id)
+
+            visible_features = [
+                feature[0] for _, _, features in clusters for feature in features
+            ]
 
         else:
             clusters = cherrypy.request.index.top_cluster_features(
                 top_k=int(top_k_features)
             )
             total_docs = 0
+            visible_features = None
 
         return template.render(
             clusters=clusters,
@@ -331,6 +343,7 @@ class Index:
             index_id=index_id,
             highlight_feature_id=highlight_feature_id,
             highlight_cluster_id=highlight_cluster_id,
+            visible_features=visible_features,
         )
 
     @cherrypy.expose

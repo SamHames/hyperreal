@@ -32,6 +32,15 @@
         <button type="submit">Delete Clusters 🗑️</button>
         <button type="submit" formaction="/index/{{ index_id }}/cluster/merge" method="post">Merge Clusters</button>
     </form>
+
+    {% if visible_features %}
+    <form method="post" action="/index/{{ index_id }}/cluster/create">
+        {% for feature_id in visible_features %}
+        <input type="hidden" name="feature_id" value={{ feature_id }}>
+        {% endfor %}
+        <button type="submit">Create New Cluster From All Visible Features</button>
+    </form>
+    {% endif %}
 </details>
 
 <ul class="cluster-list">
@@ -44,7 +53,9 @@
 
     {% if rendered_docs %}
     <li>
-        <p>{% if rendered_docs|length < total_docs %}Sample of the {{ total_docs }} top matching documents.{% else %}All {{ total_docs }} matching documents.{% endif %}</p>
+        <div class="cluster-header">
+            {% if rendered_docs|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
+        </div>
         <ul class="doc-list">
             {% for doc_id, doc in rendered_docs %}
             <li>{{ doc }}</li>

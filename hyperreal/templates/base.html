@@ -9,57 +9,82 @@
 
     <style type="text/css">
 
+body {
+    margin: 0 3em;
+}
+
 .cluster-list {
-    display: inline-block;
+    display: flex;
+    flex-wrap: wrap;
     list-style-type: none;
-    padding-left: 0;
-    max-width: 80em;
+    padding: 0;
+    margin: 0 -0.5em;
 }
 
 .cluster-list > li {
-    margin: 2em 1em;
-    box-shadow: 0 0 0.2em 0.1em gray;
+    flex: 1 1 40ch;
+    margin: 1em 0.5em;
+    box-shadow: 0 0 0.1em 0.1em gray;
+    border-radius: 0.4em;
+    justify-content: space-between;
 }
 
 .highlight {
     border: 0.2em solid orange;
+    border-radius: 0.4em;
+}
+
+.pinned {
+    border: 0.2em solid blue;
+    border-radius: 0.4em;   
 }
 
 .cluster-list li {
     padding-left: 0;
+    background: #f6f6f6;
 }
 
 .compact-cluster {
     max-width: 80em;
-    margin: 1em;
-    padding: 0.5em;
-    padding-left: 0;
+    margin: 0.25em;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
 }
 
 .compact-cluster li {
     display: inline-block;
     list-style-type: none;
     margin: 0.25em;
-    padding-left: 0;
+    padding: 0;
+}
+
+.compact-cluster li:last-of-type {
+    margin-right: auto;
+}
+
+.cluster-footer {
+    margin: 1em 0.5em;
 }
 
 .cluster-header {
     background: black;
     color: white;
+    border-radius: 0.4em 0.4em 0 0;
+    padding: 0 0.5em;
 }
-
-.feature-link { text-decoration: none; }
 
 .doc-list {
-    padding-left: 0;
+    padding: 0;
 }
+
 .doc-list > li{
-    margin: 1em;
-    border-left: 0.5em solid grey;
-    background-color: #eee;
+    margin: 0.75em 0.5em;
+    background-color: white;
     list-style-type: none;
     padding: 0.5em;
-
+    border-radius: 0.4em;
 }
 
 img {
@@ -67,26 +92,40 @@ img {
 }
 
 .feature {
-  border: 0.1em solid black;
-  border-radius: 0.2em;
-  display: inline-block;
-  margin: 0 0.5em;
+    position: relative;
+    box-shadow: 0.05em 0.05em 0.05em 0.05em gray;
+    border-radius: 0.4em;
+    display: inline-block;
+    margin: 0;
+    margin-bottom: 0.5em;
+    min-width: 4.5ch;
+    background: white;
+
 }
 
 .field {
-  background: black;
-  color: white;
-  height:  100%;
-  padding: 0 0.5em;
+    position: absolute;
+    left: 0.1em;
+    top: 0.1em;
+    color: black;
+    padding: 0.1em;
+    margin: 0;
+    font-size: 50%;
 }
 
 .value {
-    padding: 0 0.5em;
+    padding: 0.75em 0.5em;
+    text-align: center;
 }
 
 .score {
     color: black;
-    font-size: 60%;
+    font-size: 50%;
+    padding: 0.1em;
+    position: absolute;
+    right: 0.1em;
+    bottom: 0.1em;
+    display: table-cell;
 }
 
 table {
@@ -99,7 +138,7 @@ thead {
     border-bottom: 0.1em solid black;
 }
 
-tbody > tr:nth-child(odd) {background: #eee}
+tbody > tr:nth-child(odd) {background: #f6f6f6}
 
 th {
     padding: 0.5em;
@@ -119,6 +158,28 @@ form {
     max-width: 80em;
 }
 
+.nav-links {
+    display: flex;
+    list-style-type: none;
+    margin-bottom: 1em;
+    margin-top: 0em;
+    padding-left: 0;
+}
+
+.nav-links li {
+    margin-right: 1em;
+}
+
+nav, h1 {
+    display: inline-block;
+}
+
+h1 {
+    margin-bottom: 1rem;
+    margin-right: 1rem;
+}
+
+
     </style>
 
     {% block meta %}
@@ -129,10 +190,10 @@ form {
     <header>
         <h1><a href="/">Feature Clustering</a></h1>
         <nav>
-        <ul>
-        {% block nav %}
-        {% endblock %}
-        </ul>
+            <ul class="nav-links">
+            {% block nav %}
+            {% endblock %}
+            </ul>
         </nav>
     </header>
     <main>{% block content %}{% endblock %}</main>

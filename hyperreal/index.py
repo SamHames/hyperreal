@@ -833,6 +833,15 @@ class Index:
             )
         ]
 
+    @property
+    def pinned_cluster_ids(self):
+        return {
+            r[0]
+            for r in self.db.execute(
+                "select cluster_id from cluster where pinned order by cluster_id"
+            )
+        }
+
     @atomic()
     def top_cluster_features(self, top_k=20):
         """Return the top_k features according to the number of matching documents."""
@@ -868,7 +877,12 @@ class Index:
 
         """
 
-        cluster_ids = cluster_ids or self.cluster_ids
+        cluster_ids = cluster_ids or [
+            r[0]
+            for r in self.db.execute(
+                "select cluster_id from cluster order by feature_count desc"
+            )
+        ]
 
         if scoring == "jaccard":
             work = [
@@ -877,6 +891,7 @@ class Index:
             pivoted = (
                 r for r in self.pool.map(_pivot_cluster_by_query_jaccard, work) if r[1]
             )
+
         elif scoring == "chi_squared":
             N = list(self.db.execute("select count(*) from doc_key"))[0][0]
             work = [
@@ -977,7 +992,7 @@ class Index:
         pinned_features: Optional[Iterable[int]] = None,
         probe_query: Optional[AbstractBitMap] = None,
         max_clusters: Optional[int] = None,
-        tolerance: float = 0.001,
+        tolerance: float = 0.01,
     ) -> dict[Hashable, set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
@@ -1004,10 +1019,11 @@ class Index:
         objective will be dissolved. Dissolves will be conducted evenly per
         iteration, rather than all at once.
 
-        tolerance: specifies a termination tolerance. If the relative change
-        in objective is less than this after an iteration, or if fewer than
-        this fraction of non-pinned features moves during an iteration,
-        terminate early.
+        tolerance: specifies a termination tolerance. If fewer than
+        tolerance * total_features features move in an iteration, terminate
+        early. The default is set at 0.01, or 1% - the model is considered
+        converged if less than 1% of the features have moved during an
+        iteration.
 
         """
 
@@ -1021,6 +1037,12 @@ class Index:
         cluster_feature = {
             cluster_id: features.copy()
             for cluster_id, features in cluster_feature.items()
+        }
+
+        feature_cluster = {
+            feature_id: cluster_id
+            for cluster_id, features in cluster_feature.items()
+            for feature_id in features
         }
 
         pinned_features = set(pinned_features) if pinned_features else set()
@@ -1039,12 +1061,20 @@ class Index:
             if f not in pinned_features
         }
 
+        movable_feature_list = list(movable_features)
+
+        # Used to determine the size of newly sampled clusters when filling in
+        # too-small clusters.
+        sample_cluster_size = max(
+            minimum_cluster_features, len(movable_features) // (2 * max_clusters)
+        )
+
         # Use initial cluster ids to keep track of whether any clusters
         # are fully emptied out and can be used to split larger clusters up.
         assigned_cluster_ids = set(cluster_feature)
 
         # Work out how many low objective clusters to dissolve on each iteration.
-        dissolve_clusters = len(assigned_cluster_ids) - max_clusters
+        dissolve_clusters = max(0, len(assigned_cluster_ids) - max_clusters)
         # Note that we try to structure it so the very last iteration does not dissolve
         # anything.
         dissolve_per_iteration = math.ceil(dissolve_clusters / max(1, iterations - 1))
@@ -1062,54 +1092,54 @@ class Index:
             # into account possible dissolves as well. Note that we should
             # only drop a cluster_id that was dissolved on the last
             # iteration - this allows us to be incremental in our approach.
-            current_cluster_ids = {
-                cluster_id
-                for cluster_id, values in cluster_feature.items()
-                # Keep every cluster above the minimum size, or if it has a pinned feature
-                if len(values) >= minimum_cluster_features or values & pinned_features
-            }
 
-            too_small_cluster_ids = assigned_cluster_ids - current_cluster_ids
+            # NOTE: this stage is recursive, because sampling of features could end
+            # end up emptying another cluster as well.
+            while True:
+                current_cluster_ids = {
+                    cluster_id
+                    for cluster_id, values in cluster_feature.items()
+                    # Keep every cluster above the minimum size, or if it has a pinned feature
+                    if len(values) >= minimum_cluster_features
+                    or values & pinned_features
+                }
 
-            # Actually dissolve the clusters from the model.
-            for cluster_id in too_small_cluster_ids:
-                cluster_feature[cluster_id] = set()
+                # Note the list is so the order is deterministic
+                too_small_cluster_ids = sorted(
+                    assigned_cluster_ids - current_cluster_ids
+                )
 
-            if too_small_cluster_ids:
-                logger.info(f"Filling {len(too_small_cluster_ids)} too-small clusters.")
-
-            # The logic here is to: split the largest cluster recursively until
-            # we have enough clusters. Maybe in the future this could be a split
-            # and refine clustering instead of a simple random split?
-            while too_small_cluster_ids:
-                # Split the biggest cluster in two.
-                n_features, split_id = max(
-                    (
-                        (len(c_features), cluster_id)
-                        for cluster_id, c_features in cluster_feature.items()
+                if too_small_cluster_ids:
+                    self.logger.info(
+                        f"Filling {len(too_small_cluster_ids)} too-small clusters."
                     )
-                )
 
-                small_id = too_small_cluster_ids.pop()
+                    for cluster_id in too_small_cluster_ids:
+                        # Empty out the existing cluster - any features left will be allowed
+                        # to float and assigned to a different cluster.
+                        cluster_feature[cluster_id] = set()
 
-                changed_clusters.add(small_id)
-                changed_clusters.add(split_id)
+                        # Note that we're sampling with replacement, so a feature
+                        # might be moved more than once.
+                        sample = self.random.sample(
+                            movable_feature_list, k=sample_cluster_size
+                        )
 
-                logger.debug(
-                    f"Filling cluster {small_id} by splitting largest "
-                    f"cluster {split_id} with {n_features} features."
-                )
+                        # Actually reassign the features.
+                        for feature_id in sample:
+                            old_cluster = feature_cluster[feature_id]
+                            cluster_feature[old_cluster].discard(feature_id)
+                            cluster_feature[cluster_id].add(feature_id)
+                            feature_cluster[feature_id] = cluster_id
+                            changed_clusters.add(old_cluster)
 
-                # Account for pinned features when splitting clusters - also
-                # account for large numbers of features in a cluster being pinned.
-                to_split = list(cluster_feature[split_id] - pinned_features)
-                sample = self.random.sample(
-                    to_split, min(len(to_split), n_features // 2)
-                )
+                        changed_clusters.add(cluster_id)
 
-                for feature in sample:
-                    cluster_feature[split_id].discard(feature)
-                    cluster_feature[small_id].add(feature)
+                        self.logger.debug(
+                            f"Filled cluster {cluster_id} by sampling {sample_cluster_size} features"
+                        )
+                else:
+                    break
 
             # Compute current feature assignments and contributions to each cluster
             futures = {
@@ -1147,16 +1177,6 @@ class Index:
                     f"Dissolving {len(dissolve_cluster_ids)} low objective clusters"
                 )
             else:
-                # Note that we only check the objective if there are no more
-                # clusters to dissolve: otherwise we could leave the index in
-                # an unexpected state.
-                obj_delta = total_objective - prev_obj
-                prev_obj = total_objective
-                if (obj_delta / total_objective) < tolerance:
-                    self.logger.info(
-                        "Terminating refinement due to small change in the objective."
-                    )
-                    break
                 dissolve_cluster_ids = set()
 
             assigned_cluster_ids -= dissolve_cluster_ids
@@ -1183,12 +1203,14 @@ class Index:
                     group_features = {
                         f for c in group for f in current_cluster_scores[c][0]
                     }
+
                     # Note that we don't test adding the feature to it's own group!
                     comparison_features = {
                         f
                         for c in current_cluster_scores.keys() - set(group)
                         for f in current_cluster_scores[c][0]
                     } - pinned_features
+
                     futures.add(
                         self.pool.submit(
                             measure_add_features_to_cluster,
@@ -1279,10 +1301,10 @@ class Index:
                 for f, d in zip(feature_array, delta_array):
                     score, _, existing_cluster = current_feature_scores[f]
 
-                    # Accept improvements with only a 50% probability. If
-                    # there are multiple improvement options a move is
-                    # therefore more likely.
-                    if d > score and self.random.random() < 0.5:
+                    # Almost greedy choice - the small randomness is to break
+                    # ties and avoid spinning between the same two
+                    # positions.
+                    if d > score and self.random.random() < 0.99:
                         changed_features.add(f)
                         current_feature_scores[f] = (
                             d,
@@ -1322,6 +1344,7 @@ class Index:
         cluster_ids: Optional[Sequence[int]] = None,
         target_clusters: Optional[int] = None,
         minimum_cluster_features: int = 1,
+        tolerance: float = 0.01,
     ):
         """
         Refine the feature clusters for the current model.
@@ -1375,12 +1398,9 @@ class Index:
         # Remove pinned clusters from refinement. Note we do this after
         # creating empty clusters because a pinned cluster still needs to be
         # counted.
-        pinned_clusters = {
-            r[0] for r in self.db.execute("select cluster_id from cluster where pinned")
-        }
-
+        pinned_clusters = self.pinned_cluster_ids
         for cluster_id in pinned_clusters:
-            del cluster_feature[cluster_id]
+            cluster_feature.pop(cluster_id, None)
 
         cluster_feature = self._refine_feature_groups(
             cluster_feature,
@@ -1389,6 +1409,7 @@ class Index:
             pinned_features=pinned_features,
             minimum_cluster_features=minimum_cluster_features,
             max_clusters=target_clusters,
+            tolerance=tolerance,
         )
 
         # Serialise the actual results of the clustering!
@@ -1797,8 +1818,9 @@ def measure_feature_contribution_to_cluster(
     The contribution is the delta between the objective of the cluster without
     the feature and with the feature.
 
-    This function also has the side effect of calculating the objective
-    contribution for this exact cluster.
+    This function also has the side effect of approximating the objective
+    contribution for this feature in this cluster (assuming moving only that
+    feature).
 
     """
 
@@ -1857,12 +1879,20 @@ def measure_feature_contribution_to_cluster(
             feature_hits = len(docs)
 
             old_hits = hits - feature_hits
-            old_c = c - docs.intersection_cardinality(only_once)
+            only_once_hits = docs.intersection_cardinality(only_once)
+            old_c = c - only_once_hits
+
+            # Check if this feature intersects with any other feature in this cluster
+            intersects_with_other_feature = only_once_hits < feature_hits
 
             # It's okay for the cluster to become empty - we'll just prune it.
-            if old_c:
+            if old_c and intersects_with_other_feature:
                 old_objective = old_hits / (old_c + n_features - 1)
                 delta = objective - old_objective
+
+            # Penalises features that don't intersect with other features in the cluster.
+            elif old_c:
+                delta = -1
             # If it would otherwise be a singleton cluster, just mark it as no change
             else:
                 delta = 0
@@ -1932,11 +1962,17 @@ def measure_add_features_to_cluster(
 
             feature_hits = len(docs)
 
-            new_hits = hits + feature_hits
-            new_c = docs.union_cardinality(cluster_union)
-            new_objective = new_hits / (new_c + n_features + 1)
+            if docs.intersect(cluster_union):
+                new_hits = hits + feature_hits
+                new_c = docs.union_cardinality(cluster_union)
+                new_objective = new_hits / (new_c + n_features + 1)
 
-            delta = new_objective - objective
+                delta = new_objective - objective
+
+            # If the feature doesn't intersect with the cluster at all,
+            # give it a bad delta.
+            else:
+                delta = -1
 
             delta_array[i] = delta
 
