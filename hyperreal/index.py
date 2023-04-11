@@ -172,11 +172,22 @@ class Index:
 
     @property
     def pool(self):
-        """Lazily initialised multiprocessing pool if none is provided on init."""
+        """
+        Lazily initialised multiprocessing pool if none is provided on init.
+
+        Note that if a pool is generated on demand an atexit handler will be created
+        to cleanup the pool and pending tasks. If a pool is passed in to this instance,
+        no cleanup action will be taken.
+
+        """
         if self._pool is None:
             self._pool = cf.ProcessPoolExecutor(mp_context=mp.get_context("spawn"))
 
-        return self._pool
+            def shutdown_pool(pool):
+                "Create an exit handler to ensure that the pool is cleaned up on exit."
+                pool.shutdown(wait=False, cancel_futures=True)
+
+            atexit.register(shutdown_pool, self._pool)
 
     @classmethod
     def is_index_db(cls, db_path):
