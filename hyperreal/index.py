@@ -5,6 +5,7 @@ to document keys.
 """
 
 import array
+import atexit
 import collections
 from collections.abc import Sequence, Iterable
 import concurrent.futures as cf
@@ -188,6 +189,8 @@ class Index:
                 pool.shutdown(wait=False, cancel_futures=True)
 
             atexit.register(shutdown_pool, self._pool)
+
+        return self._pool
 
     @classmethod
     def is_index_db(cls, db_path):
