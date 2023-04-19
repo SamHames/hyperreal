@@ -1208,7 +1208,7 @@ class Index:
 
             if group_test and n_batches > 2:
                 cluster_groups = [
-                    tuple(cluster_ids[i::n_batches]) for i in range(n_batches)
+                    set(cluster_ids[i::n_batches]) for i in range(n_batches)
                 ]
 
                 futures = set()
@@ -1235,6 +1235,22 @@ class Index:
                             probe_query,
                         )
                     )
+
+                    # Handle the cluster group specially
+                    for cluster_id in sorted(group):
+                        subgroup = group - set([cluster_id])
+                        subgroup_features = group_features - cluster_feature[cluster_id]
+                        test_features = cluster_feature[cluster_id] - pinned_features
+                        futures.add(
+                            self.pool.submit(
+                                measure_add_features_to_cluster,
+                                self.db_path,
+                                subgroup,
+                                subgroup_features,
+                                test_features,
+                                probe_query,
+                            )
+                        )
 
                 # Accumulate the best group to do a detailed check against
                 best_groups = {}
@@ -1318,7 +1334,7 @@ class Index:
                     # Almost greedy choice - the small randomness is to break
                     # ties and avoid spinning between the same two
                     # positions.
-                    if d > score and self.random.random() < 0.99:
+                    if d > score and self.random.random() < 0.75:
                         changed_features.add(f)
                         current_feature_scores[f] = (
                             d,
@@ -1939,6 +1955,10 @@ def measure_add_features_to_cluster(
         index.db.execute("begin")
 
         # PHASE 1: Current cluster objective and cover.
+
+        # Handle the case of the empty cluster.
+        if not feature_group:
+            return group_key, array.array("q", []), array.array("d", [])
 
         # The union of all docs covered by the cluster
         cluster_union = BitMap()
