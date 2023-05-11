@@ -999,15 +999,15 @@ class Index:
 
     def _refine_feature_groups(
         self,
-        cluster_feature: dict[Hashable, set[int]],
+        cluster_feature: dict[int, set[int]],
         iterations: int = 10,
         group_test: bool = True,
         minimum_cluster_features: int = 1,
         pinned_features: Optional[Iterable[int]] = None,
         probe_query: Optional[AbstractBitMap] = None,
-        max_clusters: Optional[int] = None,
+        target_clusters: Optional[int] = None,
         tolerance: float = 0.01,
-    ) -> dict[Hashable, set[int]]:
+    ) -> tuple[dict[int, set[int]], set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
 
@@ -1016,9 +1016,10 @@ class Index:
         This is most useful if you want to explore specific clustering
         approaches without the constraint of the saved clusters.
 
-        To expand the number of clusters in a model, empty cluster_ids can be
-        provided and will be used for additional clusters made by splitting
-        the largest clusters up.
+        To change the number of clusters in the model, set target clusters to
+        a different number of clusters than in cluster_feature - the clustering
+        will be adjusted to the target. The newly generated IDs will be returned
+        along with the new feature clustering.
 
         Pinned features will not be considered as candidates for moving.
 
@@ -1028,10 +1029,11 @@ class Index:
         clustering is not well defined in this case and should be used with
         care.
 
-        max_clusters: specifies a maximum number of clusters for the model: if
+        target_clusters: specifies a target number of clusters for the model: if
         there are more clusters, the clusters that contribute least to the
         objective will be dissolved. Dissolves will be conducted evenly per
-        iteration, rather than all at once.
+        iteration, rather than all at once. If there are fewer clusters than
+        target, new clusters will be created and filled randomly.
 
         tolerance: specifies a termination tolerance. If fewer than
         tolerance * total_features features move in an iteration, terminate
@@ -1041,11 +1043,11 @@ class Index:
 
         """
 
-        max_clusters = max_clusters or len(cluster_feature)
+        target_clusters = target_clusters or len(cluster_feature)
 
         # If cluster_feature is empty, return immediately
         if not len(cluster_feature.keys()):
-            return cluster_feature
+            return cluster_feature, set()
 
         # Make sure to copy the input dict
         cluster_feature = {
@@ -1077,27 +1079,36 @@ class Index:
 
         movable_feature_list = list(movable_features)
 
-        # Used to determine the size of newly sampled clusters when filling in
-        # too-small clusters.
-        sample_cluster_size = max(
-            minimum_cluster_features, len(movable_features) // (2 * max_clusters)
-        )
+        available_workers = self.pool._max_workers
+
+        current_cluster_scores = {}
+        changed_clusters = set(cluster_feature)
+
+        # Generate new cluster_ids and emtpy clusters if we have less clusters
+        # than target_clusters
+        next_cluster_id = max(cluster_feature) + 1
+        new_clusters = target_clusters - len(cluster_feature)
+        new_cluster_ids = list(range(next_cluster_id, next_cluster_id + new_clusters))
+
+        for cluster_id in new_cluster_ids:
+            cluster_feature[cluster_id] = set()
 
         # Use initial cluster ids to keep track of whether any clusters
         # are fully emptied out and can be used to split larger clusters up.
         assigned_cluster_ids = set(cluster_feature)
 
+        # Used to determine the size of newly sampled clusters when filling in
+        # too-small clusters.
+        sample_cluster_size = max(
+            minimum_cluster_features, len(movable_features) // (2 * target_clusters)
+        )
+
         # Work out how many low objective clusters to dissolve on each iteration.
-        dissolve_clusters = max(0, len(assigned_cluster_ids) - max_clusters)
+        dissolve_clusters = max(0, len(assigned_cluster_ids) - target_clusters)
         # Note that we try to structure it so the very last iteration does not dissolve
         # anything.
         dissolve_per_iteration = math.ceil(dissolve_clusters / max(1, iterations - 1))
         dissolve_cluster_ids = set()
-
-        available_workers = self.pool._max_workers
-
-        current_cluster_scores = {}
-        changed_clusters = set(cluster_feature)
 
         prev_obj = 0
 
@@ -1365,7 +1376,7 @@ class Index:
                 f"Finished iteration {iteration + 1}/{iterations}, {len(changed_clusters)} changed clusters, {len(changed_features)} features"
             )
 
-        return cluster_feature
+        return cluster_feature, new_cluster_ids
 
     @atomic()
     def refine_clusters(
@@ -1413,34 +1424,44 @@ class Index:
                 if pinned:
                     pinned_features.add(feature_id)
 
-        # If the target clusters is greater than the current clusters, create
-        # empty clusters to expand into. The other case where there are
-        # more clusters than desired will be handled in _refine_feature_groups
+        # Set target clusters to the current number of clusters, or the
+        # provided value. But we also need to account for pinned clusters in
+        # the next step, otherwise this will be the wrong count.
+        # TODO: move pinned cluster handling down to _refine_feature_groups.
         target_clusters = target_clusters or len(cluster_feature)
-        n_empty_required = target_clusters - len(cluster_feature)
 
-        if n_empty_required > 0:
-            next_cluster_id = self.next_cluster_id()
+        # Remove pinned clusters from refinement, and don't count them towards
+        # target clusters.
+        pinned_clusters = set(self.pinned_cluster_ids)
 
-            for i in range(n_empty_required):
-                cluster_feature[next_cluster_id + i] = set()
-
-        # Remove pinned clusters from refinement. Note we do this after
-        # creating empty clusters because a pinned cluster still needs to be
-        # counted.
-        pinned_clusters = self.pinned_cluster_ids
         for cluster_id in pinned_clusters:
-            cluster_feature.pop(cluster_id, None)
+            if cluster_id in cluster_feature:
+                del cluster_feature[cluster_id]
+                target_clusters -= 1
 
-        cluster_feature = self._refine_feature_groups(
+        cluster_feature, new_cluster_ids = self._refine_feature_groups(
             cluster_feature,
             iterations=iterations,
             group_test=True,
             pinned_features=pinned_features,
             minimum_cluster_features=minimum_cluster_features,
-            max_clusters=target_clusters,
+            target_clusters=target_clusters,
             tolerance=tolerance,
         )
+
+        # Map new_cluster_ids generated to actual globally unique IDs.
+        # Make sure to copy these out first, as new_cluster_ids might overlap
+        # with the global clustering model!
+        new_cluster_feature = {
+            cluster_id: cluster_feature[cluster_id] for cluster_id in new_cluster_ids
+        }
+
+        next_cluster_id = self.next_cluster_id()
+
+        for cluster_id in new_cluster_ids:
+            del cluster_feature[cluster_id]
+            cluster_feature[next_cluster_id] = new_cluster_feature[cluster_id]
+            next_cluster_id += 1
 
         # Serialise the actual results of the clustering!
         self._update_cluster_feature(cluster_feature)
