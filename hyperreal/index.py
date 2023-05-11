@@ -1313,10 +1313,10 @@ class Index:
             current_feature_scores = {
                 # This will track delta, proposed cluster, existing cluster
                 f: (
-                    (d, c, c)
+                    (d, c)
                     if c not in dissolve_cluster_ids
                     # Randomly choose a base cluster if the cluster is being dissolved.
-                    else (-math.inf, self.random.choice(cluster_ids), c)
+                    else (-math.inf, self.random.choice(cluster_ids))
                 )
                 for c, (features, deltas, _) in current_cluster_scores.items()
                 for f, d in zip(features, deltas)
@@ -1340,26 +1340,26 @@ class Index:
                 # see all possible moves, there might be better moves we haven't
                 # tested.
                 for f, d in zip(feature_array, delta_array):
-                    score, _, existing_cluster = current_feature_scores[f]
+                    score, existing_cluster = current_feature_scores[f]
 
                     # Almost greedy choice - the small randomness is to break
                     # ties and avoid spinning between the same two
                     # positions.
-                    if d > score and self.random.random() < 0.75:
+                    if d > score and (
+                        (score == -math.inf) or (self.random.random() < 0.75)
+                    ):
                         changed_features.add(f)
-                        current_feature_scores[f] = (
-                            d,
-                            test_cluster,
-                            existing_cluster,
-                        )
+                        current_feature_scores[f] = (d, test_cluster)
 
             # Actually assign to the new clusters, having done all of that.
             for f in changed_features:
-                _, new_cluster, old_cluster = current_feature_scores[f]
+                _, new_cluster = current_feature_scores[f]
+                old_cluster = feature_cluster[f]
                 changed_clusters.add(new_cluster)
                 changed_clusters.add(old_cluster)
                 cluster_feature[old_cluster].discard(f)
                 cluster_feature[new_cluster].add(f)
+                feature_cluster[f] = new_cluster
 
             for cluster_id in dissolve_cluster_ids:
                 del current_cluster_scores[cluster_id]
