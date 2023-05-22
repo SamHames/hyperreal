@@ -997,6 +997,111 @@ class Index:
             )
         )[0][0]
 
+    def _measure_feature_cluster_contributions(
+        self,
+        cluster_feature: dict[Hashable, set[int]],
+        probe_query: Optional[AbstractBitMap] = None,
+    ) -> dict[Hashable, tuple[array.array, array.array, float]]:
+        """
+        Return the estimated contribution of each feature to its own cluster.
+
+        The return type is arrays of features and associated scores to keep
+        things compact in memory and limit serialisation overhead when dealing
+        with large numbers of features/clusters.
+
+        """
+        futures = {
+            self.pool.submit(
+                measure_feature_contribution_to_cluster,
+                self.db_path,
+                cluster,
+                features,
+                probe_query,
+            )
+            for cluster, features in cluster_feature.items()
+        }
+
+        feature_contributions = {}
+
+        for future in cf.as_completed(futures):
+            result = future.result()
+            feature_contributions[result[0]] = result[1:]
+
+        return feature_contributions
+
+    def _calculate_best_feature_moves(
+        self,
+        cluster_feature: dict[Hashable, set[int]],
+        cluster_check_feature: dict[Hashable, set[int]],
+        probe_query: Optional[AbstractBitMap] = None,
+        top_k: int = 1,
+    ) -> dict[int, tuple[float, Hashable]]:
+        """
+        Return the estimated best cluster/s for each feature.
+
+        This should be used in conjunction with the scores output from
+        `_measure_feature_cluster_contributions`, which describes the contribution
+        of each feature to its own cluster.
+
+        The input is two mappings:
+
+        cluster_feature - the current cluster: features mapping
+        cluster_check_features - mapping of cluster: features to check
+            against moving into this cluster. Note that features will
+            be removed from this set if they are already in this cluster
+            in cluster_feature.
+
+        acceptance_probability is a softening factor, used to prevent
+        cycling between the same states on repeated iteration.
+
+        top_k: the number of best scores to keep - the default is to only
+            the single best scoring feature.
+
+        """
+
+        # preflight check:
+        missing_clusters = {
+            cluster_key
+            for cluster_key in cluster_check_feature
+            if cluster_key not in cluster_feature
+        }
+
+        if missing_clusters:
+            raise KeyError(
+                f"`cluster_feature` is missing clusters with keys: {missing_clusters}"
+            )
+
+        futures = [
+            self.pool.submit(
+                measure_add_features_to_cluster,
+                self.db_path,
+                cluster_key,
+                cluster_feature[cluster_key],
+                cluster_check_feature[cluster_key] - cluster_feature[cluster_key],
+                probe_query,
+            )
+            # dispatch in sort order for reproducibility with randomisation
+            for cluster_key in sorted(cluster_check_feature)
+        ]
+
+        best_clusters = collections.defaultdict(list)
+
+        for future in futures:
+            test_cluster, feature_array, delta_array = future.result()
+
+            for feature, delta in zip(feature_array, delta_array):
+                current_scores = len(best_clusters[feature])
+
+                if current_scores < top_k:
+                    heapq.heappush(best_clusters[feature], (delta, test_cluster))
+                else:
+                    heapq.heappushpop(best_clusters[feature], (delta, test_cluster))
+
+        return {
+            key: sorted(feature_scores, reverse=True)
+            for key, feature_scores in best_clusters.items()
+        }
+
     def _refine_feature_groups(
         self,
         cluster_feature: dict[int, set[int]],
@@ -1007,6 +1112,7 @@ class Index:
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.01,
+        acceptance_probability: float = 0.75,
     ) -> tuple[dict[int, set[int]], set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
@@ -1040,6 +1146,9 @@ class Index:
         early. The default is set at 0.01, or 1% - the model is considered
         converged if less than 1% of the features have moved during an
         iteration.
+
+        acceptance_probability: the probability a move that is estimated to
+            improve the score will be accepted.
 
         """
 
@@ -1078,6 +1187,7 @@ class Index:
         }
 
         movable_feature_list = list(movable_features)
+        moved_features = len(movable_features)
 
         available_workers = self.pool._max_workers
 
@@ -1167,23 +1277,12 @@ class Index:
                     break
 
             # Compute current feature assignments and contributions to each cluster
-            futures = {
-                self.pool.submit(
-                    measure_feature_contribution_to_cluster,
-                    self.db_path,
-                    cluster,
-                    features,
-                    probe_query,
-                )
-                for cluster, features in cluster_feature.items()
-                if features and cluster in changed_clusters
-            }
-
-            for f in cf.as_completed(futures):
-                r = f.result()
-                current_cluster_scores[r[0]] = r[1:]
+            current_cluster_scores = self._measure_feature_cluster_contributions(
+                cluster_feature, probe_query=probe_query
+            )
 
             total_objective = sum(r[2] for r in current_cluster_scores.values())
+
             self.logger.info(
                 f"Iteration {iteration}, current objective: {total_objective}"
             )
@@ -1222,158 +1321,106 @@ class Index:
                     set(cluster_ids[i::n_batches]) for i in range(n_batches)
                 ]
 
-                futures = set()
+                group_features = {}
+                group_feature_checks = {}
 
                 for group in cluster_groups:
-                    group_features = {
-                        f for c in group for f in current_cluster_scores[c][0]
-                    }
-
-                    # Note that we don't test adding the feature to it's own group!
-                    comparison_features = {
-                        f
-                        for c in current_cluster_scores.keys() - set(group)
-                        for f in current_cluster_scores[c][0]
-                    } - pinned_features
-
-                    futures.add(
-                        self.pool.submit(
-                            measure_add_features_to_cluster,
-                            self.db_path,
-                            group,
-                            group_features,
-                            comparison_features,
-                            probe_query,
-                        )
+                    group_key = tuple(sorted(group))
+                    this_group_features = set.union(
+                        *(cluster_feature[key] for key in group_key)
                     )
 
-                    # Handle the cluster group specially
-                    for cluster_id in sorted(group):
-                        subgroup = group - set([cluster_id])
-                        subgroup_features = group_features - cluster_feature[cluster_id]
-                        test_features = cluster_feature[cluster_id] - pinned_features
-                        futures.add(
-                            self.pool.submit(
-                                measure_add_features_to_cluster,
-                                self.db_path,
-                                subgroup,
-                                subgroup_features,
-                                test_features,
-                                probe_query,
-                            )
+                    group_features[group_key] = this_group_features
+                    group_feature_checks[group_key] = movable_features
+
+                    # Handle features in the current group specially by generating specific smaller
+                    # groups excluding the self cluster.
+                    for cluster_key in group_key:
+                        subgroup_key = tuple(sorted(group - set([cluster_key])))
+                        subgroup_features = (
+                            this_group_features - cluster_feature[cluster_key]
+                        )
+                        subgroup_feature_checks = (
+                            cluster_feature[cluster_key] - pinned_features
                         )
 
-                # Accumulate the best group to do a detailed check against
-                best_groups = {}
+                        group_features[subgroup_key] = subgroup_features
+                        group_feature_checks[subgroup_key] = subgroup_feature_checks
 
-                for f in cf.as_completed(futures):
-                    group_key, feature_array, delta_array = f.result()
+                best_groups = self._calculate_best_feature_moves(
+                    group_features, group_feature_checks, probe_query=probe_query
+                )
 
-                    for feature, delta in zip(feature_array, delta_array):
-                        # Note that we can't use a defaultdict for this, as
-                        # we would need to know the structure of group_key for
-                        # comparison purposes.
-                        try:
-                            best_groups[feature] = max(
-                                best_groups[feature], (delta, group_key)
-                            )
-                        except KeyError:
-                            best_groups[feature] = (delta, group_key)
+                cluster_feature_checks = collections.defaultdict(set)
 
-                # Individual cluster checks against the selected comparison group
-                comparison_features = collections.defaultdict(list)
-                for feature, (_, group_key) in best_groups.items():
-                    for c in group_key:
-                        comparison_features[c].append(feature)
+                # Convert best group results into individual cluster checks
+                for feature, groups in best_groups.items():
+                    for _, group_key in groups:
+                        for cluster_key in group_key:
+                            cluster_feature_checks[cluster_key].add(feature)
 
             else:
-                comparison_features = {
-                    c: movable_features - set(current_cluster[0])
-                    for c, current_cluster in current_cluster_scores.items()
-                    if c not in dissolve_cluster_ids
-                }
+                cluster_feature_checks = {c: movable_features for c in cluster_ids}
 
-            # Implementation detail: we're going to make this deterministic,
-            # by processing return values in the order than they were submitted,
-            # and *not* in the order they complete!
-            futures = []
+            best_feature_clusters = self._calculate_best_feature_moves(
+                cluster_feature,
+                cluster_feature_checks,
+                probe_query=probe_query,
+            )
 
-            for c in sorted(comparison_features):
-                futures.append(
-                    self.pool.submit(
-                        measure_add_features_to_cluster,
-                        self.db_path,
-                        c,
-                        current_cluster_scores[c][0],
-                        comparison_features[c],
-                        probe_query,
-                    )
-                )
-
-            current_feature_scores = {
-                # This will track delta, proposed cluster, existing cluster
-                f: (
-                    (d, c)
-                    if c not in dissolve_cluster_ids
-                    # Randomly choose a base cluster if the cluster is being dissolved.
-                    else (-math.inf, self.random.choice(cluster_ids))
-                )
-                for c, (features, deltas, _) in current_cluster_scores.items()
-                for f, d in zip(features, deltas)
-            }
-
-            changed_features = set()
+            moved_features = 0
+            features_with_possible_improvements = 0
             changed_clusters = set()
 
-            # Make sure to process moves for dissolved clusters
-            for cluster_id in dissolve_cluster_ids:
-                changed_features |= cluster_feature[cluster_id]
+            for current_cluster in sorted(current_cluster_scores):
+                features, deltas, _ = current_cluster_scores[current_cluster]
 
-            # Implementation note: cf.as_completed(futures) might be faster,
-            # but is not deterministic like we'd want.
-            for f in futures:
-                test_cluster, feature_array, delta_array = f.result()
+                # When a cluster is dissolved, just reassign to the best cluster
+                # immediately.
+                if current_cluster in dissolve_cluster_ids:
+                    for feature_id, current_delta in zip(features, deltas):
+                        new_cluster = best_feature_clusters[feature_id][0][1]
+                        cluster_feature[current_cluster].discard(feature_id)
+                        cluster_feature[new_cluster].add(feature_id)
+                        feature_cluster[feature_id] = new_cluster
 
-                # Note that we're not accumulating to the best possible score here!
-                # We accept any change that improves the cluster score with a certain
-                # probability. Note also that the group testing means that we won't
-                # see all possible moves, there might be better moves we haven't
-                # tested.
-                for f, d in zip(feature_array, delta_array):
-                    score, existing_cluster = current_feature_scores[f]
+                        changed_clusters.add(new_cluster)
 
-                    # Almost greedy choice - the small randomness is to break
-                    # ties and avoid spinning between the same two
-                    # positions.
-                    if d > score and (
-                        (score == -math.inf) or (self.random.random() < 0.75)
-                    ):
-                        changed_features.add(f)
-                        current_feature_scores[f] = (d, test_cluster)
+                else:
+                    for feature_id, current_delta in zip(features, deltas):
+                        if feature_id in pinned_features:
+                            continue
 
-            # Actually assign to the new clusters, having done all of that.
-            for f in changed_features:
-                _, new_cluster = current_feature_scores[f]
-                old_cluster = feature_cluster[f]
-                changed_clusters.add(new_cluster)
-                changed_clusters.add(old_cluster)
-                cluster_feature[old_cluster].discard(f)
-                cluster_feature[new_cluster].add(f)
-                feature_cluster[f] = new_cluster
+                        comparison_delta, comparison_cluster = best_feature_clusters[
+                            feature_id
+                        ][0]
+
+                        if (
+                            comparison_delta >= current_delta
+                            and self.random.random() < acceptance_probability
+                        ):
+                            cluster_feature[current_cluster].discard(feature_id)
+                            cluster_feature[comparison_cluster].add(feature_id)
+                            feature_cluster[feature_id] = comparison_cluster
+
+                            changed_clusters.add(comparison_cluster)
+
+                            moved_features += 1
 
             for cluster_id in dissolve_cluster_ids:
                 del current_cluster_scores[cluster_id]
                 del cluster_feature[cluster_id]
 
             if not dissolve_cluster_ids:
-                if (len(changed_features) / len(movable_features)) < tolerance:
+                if (moved_features / len(movable_features)) < tolerance:
                     self.logger.info(
                         "Terminating refinement due to small number of feature moves."
                     )
                     break
 
             self.logger.info(
-                f"Finished iteration {iteration + 1}/{iterations}, {len(changed_clusters)} changed clusters, {len(changed_features)} features"
+                f"Finished iteration {iteration + 1}/{iterations}, changed "
+                f"{len(changed_clusters)} clusters, moved {moved_features} features."
             )
 
         return cluster_feature, new_cluster_ids
@@ -1862,7 +1909,7 @@ def measure_feature_contribution_to_cluster(
     group_key,
     feature_group: set[int],
     probe_query: Optional[AbstractBitMap],
-):
+) -> tuple[Any, array.array, array.array, float]:
     """
     Measure the contribution of each feature to this cluster.
 
@@ -1890,6 +1937,9 @@ def measure_feature_contribution_to_cluster(
 
         hits = 0
         n_features = len(feature_group)
+
+        if not n_features:
+            return group_key, array.array("q"), array.array("d"), 0
 
         # Construct the union of all cluster tokens, and also the set of
         # documents only covered by a single feature.
@@ -1938,7 +1988,8 @@ def measure_feature_contribution_to_cluster(
 
             # It's okay for the cluster to become empty - we'll just prune it.
             if old_c and intersects_with_other_feature:
-                old_objective = old_hits / (old_c + n_features - 1)
+                old_objective = old_hits / (old_c + (n_features - 1))
+
                 delta = objective - old_objective
 
             # Penalises features that don't intersect with other features in the cluster.
@@ -2020,7 +2071,7 @@ def measure_add_features_to_cluster(
             if docs.intersect(cluster_union):
                 new_hits = hits + feature_hits
                 new_c = docs.union_cardinality(cluster_union)
-                new_objective = new_hits / (new_c + n_features + 1)
+                new_objective = new_hits / (new_c + (n_features + 1))
 
                 delta = new_objective - objective
 
