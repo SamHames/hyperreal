@@ -311,8 +311,8 @@ class Index:
     def index(
         self,
         doc_batch_size=1000,
-        merge_batches=10,
         working_dir=None,
+        workers=None,
         skipgram_window_size=0,
         skipgram_min_docs=3,
     ):
@@ -340,7 +340,7 @@ class Index:
 
         """
 
-        workers = self.pool._max_workers
+        workers = workers or self.pool._max_workers
 
         try:
             self.db.execute("begin")
@@ -349,20 +349,14 @@ class Index:
                 "The `index` method can't be called in a nested transaction."
             )
 
-        if merge_batches > 10:
-            raise ValueError(f"merge_batches must be <= 10.")
-
         try:
-            tempdir = working_dir or tempfile.TemporaryDirectory()
-            current_temp_file_counter = 0
+            manager = mp.Manager()
+            write_lock = manager.Lock()
 
-            def get_next_temp_file():
-                nonlocal current_temp_file_counter
-                temp_file_path = os.path.join(
-                    tempdir.name, str(current_temp_file_counter)
-                )
-                current_temp_file_counter += 1
-                return temp_file_path
+            detach = False
+
+            tempdir = working_dir or tempfile.TemporaryDirectory()
+            temp_index = os.path.join(tempdir.name, "temp_index.db")
 
             # We're still inside a transaction here, so processes reading from
             # the index won't see any of these changes until the release at
@@ -398,44 +392,21 @@ class Index:
                             self.corpus,
                             batch_doc_ids,
                             batch_doc_keys,
-                            get_next_temp_file(),
+                            temp_index,
                             skipgram_window_size,
+                            write_lock,
                         )
                     )
                     batch_doc_ids = []
                     batch_doc_keys = []
                     batch_size = 0
 
-                    if len(futures) >= workers:
+                    # Be polite and avoid filling up the queue.
+                    if len(futures) >= workers + 1:
                         done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
 
                         for f in done:
-                            try:
-                                segment_path, level = f.result()
-                                to_merge[level].append(segment_path)
-                            except Exception:
-                                self.logger.exception(
-                                    "Caught indexing exception from background."
-                                )
-                                raise
-
-                        # Note that there's an SQLite limit to how many db's
-                        # we can attach at once, so we can't dispatch more than
-                        # to_merge at any time, even if there's more available.
-                        for level, paths in list(to_merge.items()):
-                            if len(paths) >= merge_batches:
-                                futures.add(
-                                    self.pool.submit(
-                                        _merge_indices,
-                                        get_next_temp_file(),
-                                        level + 1,
-                                        *paths[:merge_batches],
-                                    )
-                                )
-                                self.logger.debug(
-                                    f"Dispatching batches {paths[:merge_batches]}for merging."
-                                )
-                                to_merge[level] = paths[merge_batches:]
+                            f.result()
 
             # Dispatch the final batch.
             if batch_doc_keys:
@@ -446,66 +417,13 @@ class Index:
                         self.corpus,
                         batch_doc_ids,
                         batch_doc_keys,
-                        get_next_temp_file(),
+                        temp_index,
                         skipgram_window_size,
+                        write_lock,
                     )
                 )
 
             self.logger.info("Waiting for batches to complete.")
-
-            # Finalise all segment indexing
-            while futures:
-                done, futures = cf.wait(futures, return_when="FIRST_COMPLETED")
-
-                for future in done:
-                    segment_path, level = future.result()
-                    to_merge[level].append(segment_path)
-
-                for level, paths in list(to_merge.items()):
-                    if len(paths) >= merge_batches:
-                        futures.add(
-                            self.pool.submit(
-                                _merge_indices,
-                                get_next_temp_file(),
-                                level + 1,
-                                *paths[:merge_batches],
-                            )
-                        )
-                        to_merge[level] = paths[merge_batches:]
-
-            self.logger.info("Merging batches.")
-            # The merge strategy is different now: if we are below merge_batches left, just go
-            # straight to that, otherwise dispatch as many chunks as possible
-            to_merge = [p for paths in to_merge.values() for p in paths]
-
-            while len(to_merge) > 1:
-                futures = set()
-                merge_blocks = math.ceil(len(to_merge) / merge_batches)
-                # Now to try to dispatch more similar chunks of work, regardless of level.
-
-                for i in range(merge_blocks):
-                    futures.add(
-                        self.pool.submit(
-                            _merge_indices,
-                            get_next_temp_file(),
-                            level + 1,
-                            *to_merge[i::merge_blocks],
-                        )
-                    )
-
-                to_merge = []
-                for f in cf.as_completed(futures):
-                    to_merge.append(f.result()[0])
-
-            merge_file = to_merge[0]
-
-            self.logger.info("Finalising indexing.")
-
-            # Now merge back to the original index, preserving feature_ids
-            # if this is a reindex operation.
-            # Deleted features will be removed
-            self.db.execute("attach ? as merged", [merge_file])
-            to_detach = True
 
             # Zero out existing features, but don't reassign them
             self.db.execute(
@@ -513,19 +431,31 @@ class Index:
                 [BitMap()],
             )
 
-            # Ensure there's a feature_id for every field, value
+            # Make sure all of the batches have completed.
+            for f in cf.as_completed(futures):
+                f.result()
+
+            self.logger.info("Batches complete - merging into main index.")
+
+            # Now merge back to the original index, preserving feature_ids
+            # if this is a reindex operation.
+            self.db.execute("attach ? as tempindex", [temp_index])
+            detach = True
+
+            self.db.execute(
+                "create index tempindex.field_value on inverted_index_segment(field, value)"
+            )
+
+            # Ensure rows exists
             self.db.execute(
                 """
-                insert or ignore into inverted_index
-                    select null, field, value, 0, ?
-                    from merged.inverted_index_segment
-                    -- Assign smaller feature_ids to more
-                    -- frequent features.
-                    order by docs_count desc
-                """,
-                [BitMap()],
+                insert or ignore into inverted_index(field, value, docs_count, doc_ids)
+                    select distinct field, value, 0, 0
+                    from inverted_index_segment
+                """
             )
-            # Update all features that are present in the new indexing.
+
+            # Actually populate the new values
             self.db.execute(
                 """
                 update inverted_index set
@@ -533,14 +463,11 @@ class Index:
                         select
                             docs_count,
                             doc_ids
-                        from merged.inverted_index_segment
-                        where (field, value) = (inverted_index.field, inverted_index.value)
+                        from inverted_index_segment iis
+                        where (iis.field, iis.value) = (field, value)
                     )
-                where (field, value) in (
-                    select field, value
-                    from merged.inverted_index_segment
-                )
-                """
+                where (field, value) in (select distinct field, value from inverted_index_segment)
+                """,
             )
 
             # Update docs_counts in the clusters
@@ -556,24 +483,26 @@ class Index:
             )
 
             self.db.execute("DELETE from skipgram_count")
+
             self.db.execute(
                 """
-                INSERT into main.skipgram_count
-                select
-                    (
-                        select feature_id
-                        from inverted_index ii
-                        where (msc.field, msc.value_a) = (ii.field, ii.value)
-                    ),
-                    (
-                        select feature_id
-                        from inverted_index ii2
-                        where (msc.field, msc.value_b) = (ii2.field, ii2.value)
-                    ),
-                    distance,
-                    docs_count
-                from merged.skipgram_count msc
-                where docs_count >= ?
+                insert into skipgram_count
+                    select
+                        (
+                            select feature_id
+                            from inverted_index ii
+                            where (ii.field, ii.value) = (sc.field, sc.value_a)
+                        ),
+                        (
+                            select feature_id
+                            from inverted_index ii
+                            where (ii.field, ii.value) = (sc.field, sc.value_b)
+                        ),
+                        distance,
+                        sum(docs_count) as total_docs
+                    from tempindex.skipgram_count sc
+                    group by field, value_a, value_b, distance
+                    having total_docs >= ?
                 """,
                 [skipgram_min_docs],
             )
@@ -599,7 +528,6 @@ class Index:
             )
 
             self.db.execute("commit")
-            self.db.execute("detach merged")
 
             self.db.execute("begin")
             self._update_changed_clusters()
@@ -611,7 +539,11 @@ class Index:
             raise
 
         finally:
+            manager.shutdown()
             tempdir.cleanup()
+
+            if detach:
+                self.db.execute("detach tempindex")
 
         self.logger.info("Indexing completed.")
 
@@ -1548,7 +1480,7 @@ class Index:
         self.db.execute(
             """
             update cluster set feature_count = (
-                select count(*) 
+                select count(*)
                 from feature_cluster fc
                 where fc.cluster_id=cluster.cluster_id
             )
@@ -1593,14 +1525,14 @@ class Index:
         self.db.execute("delete from changed_cluster")
 
 
-def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size):
+def _index_docs(
+    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock
+):
     """Index all of the given docs into temp_db_path."""
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
-        local_db.execute("begin")
-
         # This is {field: {value: doc_ids, value2: doc_ids}}
         batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
         # The structure is (distance, field, value_a, value_b: count)
@@ -1632,144 +1564,58 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size):
                 for value in set_values:
                     batch[field][value].add(doc_id)
 
-        local_db.execute(
-            """
-            CREATE table inverted_index_segment(
-                field text,
-                value,
-                docs_count,
-                doc_ids roaring_bitmap,
-                primary key (field, value)
-            ) without rowid
-            """
-        )
-        for field, values in batch.items():
-            local_db.executemany(
-                "insert into inverted_index_segment values(?, ?, ?, ?)",
-                (
-                    (field, value, len(doc_ids), doc_ids)
-                    for value, doc_ids in values.items()
-                    if value is not None
-                ),
+        with write_lock:
+            local_db.execute("begin")
+            local_db.execute(
+                """
+                CREATE table if not exists inverted_index_segment(
+                    field text,
+                    value,
+                    docs_count,
+                    doc_ids roaring_bitmap
+                )
+                """
+            )
+            for field, values in batch.items():
+                local_db.executemany(
+                    "insert into inverted_index_segment values(?, ?, ?, ?)",
+                    (
+                        (field, value, len(doc_ids), doc_ids)
+                        for value, doc_ids in values.items()
+                        if value is not None
+                    ),
+                )
+
+            local_db.execute(
+                """
+                CREATE table if not exists skipgram_count(
+                    field text,
+                    value_a,
+                    value_b,
+                    distance integer,
+                    docs_count integer
+                )
+                """
             )
 
-        local_db.execute(
-            """
-            CREATE table skipgram_count(
-                field text,
-                value_a,
-                value_b,
-                distance integer,
-                docs_count integer,
-                primary key (field, value_a, value_b, distance)
-            )
-            """
-        )
+            for i, f in enumerate(skipgram_counts):
+                distance = i + 1
+                for field, item_as in f.items():
+                    for item_a, item_bs in item_as.items():
+                        local_db.executemany(
+                            "INSERT into skipgram_count values(?, ?, ?, ?, ?)",
+                            (
+                                (field, item_a, item_b, distance, c)
+                                for item_b, c in sorted(item_bs.items())
+                            ),
+                        )
 
-        for i, f in enumerate(skipgram_counts):
-            distance = i + 1
-            for field, item_as in f.items():
-                for item_a, item_bs in item_as.items():
-                    local_db.executemany(
-                        "INSERT into skipgram_count values(?, ?, ?, ?, ?)",
-                        (
-                            (field, item_a, item_b, distance, c)
-                            for item_b, c in sorted(item_bs.items())
-                        ),
-                    )
-
-        local_db.execute("commit")
+            local_db.execute("commit")
 
     finally:
         local_db.close()
 
-    return temp_db_path, 0
-
-
-def _merge_indices(target_db_path, level, *to_merge):
-    """Merge the given indices into target_db_path."""
-
-    target_db = db_utilities.connect_sqlite(target_db_path)
-
-    try:
-        target_db.execute("begin")
-
-        for i, db in enumerate(to_merge):
-            target_db.execute(f"attach ? as to_merge_{i}", [db])
-
-        target_db.execute(
-            """
-            CREATE table inverted_index_segment(
-                field text,
-                value,
-                docs_count,
-                doc_ids roaring_bitmap,
-                primary key (field, value)
-            ) without rowid
-            """
-        )
-
-        union_all = "\nunion all\n".join(
-            f"SELECT * from to_merge_{i}.inverted_index_segment"
-            for i in range(len(to_merge))
-        )
-
-        target_db.execute(
-            f"""
-            INSERT into inverted_index_segment
-                select
-                    field,
-                    value,
-                    sum(docs_count),
-                    roaring_union(doc_ids)
-                from (
-                    {union_all}
-                )
-                group by field, value
-            """
-        )
-
-        union_all = "\nunion all\n".join(
-            f"SELECT * from to_merge_{i}.skipgram_count" for i in range(len(to_merge))
-        )
-
-        target_db.execute(
-            """
-            CREATE table skipgram_count(
-                field text,
-                value_a,
-                value_b,
-                distance integer,
-                docs_count integer,
-                primary key (field, value_a, value_b, distance)
-            )
-            """
-        )
-
-        target_db.execute(
-            f"""
-            INSERT into skipgram_count
-                select
-                    field,
-                    value_a,
-                    value_b,
-                    distance,
-                    sum(docs_count)
-                from (
-                    {union_all}
-                )
-                group by 1, 2, 3, 4
-            """
-        )
-
-        target_db.execute("commit")
-
-    finally:
-        target_db.close()
-        for path in to_merge:
-            os.remove(path)
-
-    return target_db_path, level
+    return temp_db_path
 
 
 def _pivot_cluster_by_query_jaccard(args):
