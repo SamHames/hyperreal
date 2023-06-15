@@ -458,15 +458,27 @@ class Index:
             # Actually populate the new values
             self.db.execute(
                 """
+                with merged_segment as (
+                    select
+                        field,
+                        value,
+                        sum(docs_count) as docs_count,
+                        doc_ids
+                    from inverted_index_segment iis
+                    group by field, value
+                )
                 update inverted_index set
                     (docs_count, doc_ids) = (
                         select
                             docs_count,
                             doc_ids
-                        from inverted_index_segment iis
-                        where (iis.field, iis.value) = (field, value)
+                        from merged_segment ms
+                        where (ms.field, ms.value) = (
+                            inverted_index.field,
+                            inverted_index.value
+                        )
                     )
-                where (field, value) in (select distinct field, value from inverted_index_segment)
+                where (field, value) in (select field, value from merged_segment)
                 """,
             )
 
@@ -540,10 +552,11 @@ class Index:
 
         finally:
             manager.shutdown()
-            tempdir.cleanup()
 
             if detach:
                 self.db.execute("detach tempindex")
+
+            tempdir.cleanup()
 
         self.logger.info("Indexing completed.")
 
