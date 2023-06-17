@@ -64,7 +64,7 @@ def plaintext_corpus_create(text_file, corpus_db):
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
 @click.option(
-    "--doc_batch_size",
+    "--doc-batch-size",
     type=int,
     default=DEFAULT_DOC_BATCH_SIZE,
     help="The size of individual batches of documents sent for indexing. "
@@ -168,7 +168,7 @@ def stackexchange_corpus_add_site(
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
 @click.option(
-    "--doc_batch_size",
+    "--doc-batch-size",
     type=int,
     default=DEFAULT_DOC_BATCH_SIZE,
     help="The size of individual batches of documents sent for indexing. "
@@ -243,7 +243,7 @@ def twittersphere_corpus():
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(dir_okay=False))
 @click.option(
-    "--doc_batch_size",
+    "--doc-batch-size",
     type=int,
     default=100000,
     help="The size of individual batches of documents sent for indexing. "
