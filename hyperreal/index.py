@@ -430,10 +430,10 @@ class Index:
             self.logger.info("Waiting for batches to complete.")
 
             # Zero out existing features, but don't reassign them
-            # self.db.execute(
-            #     "update inverted_index set docs_count = 0, doc_ids = ?",
-            #     [BitMap()],
-            # )
+            self.db.execute(
+                "update inverted_index set docs_count = 0, doc_ids = ?",
+                [BitMap()],
+            )
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -468,23 +468,6 @@ class Index:
 
             # Actually populate the new values
             self.db.execute(query)
-
-            # Empty fields that aren't in the newly indexed documents. Instead
-            # of deleting, they are kept to keep the feature_id constant.
-            self.db.execute(
-                """
-                update inverted_index set
-                    docs_count = 0,
-                    doc_ids = ?
-                where (field, value) not in (
-                    select
-                        field,
-                        value
-                    from field_value
-                )
-                """,
-                [BitMap()],
-            )
 
             # Update docs_counts in the clusters
             self.db.execute(
@@ -1549,7 +1532,6 @@ def _index_docs(
     """Index all of the given docs into temp_db_path."""
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
-    local_db.execute("pragma journal_mode=WAL")
 
     try:
         # This is {field: {value: doc_ids, value2: doc_ids}}
@@ -1588,15 +1570,6 @@ def _index_docs(
             local_db.execute("begin")
             local_db.execute(
                 """
-                create table if not exists field_value (
-                    field,
-                    value,
-                    primary key(field, value)
-                ) without rowid
-                """
-            )
-            local_db.execute(
-                """
                 CREATE table if not exists inverted_index_segment(
                     batch_no,
                     field text,
@@ -1616,10 +1589,6 @@ def _index_docs(
                         (batch_no, field, value, len(values[value]), values[value])
                         for value in sorted_values
                     ),
-                )
-                local_db.executemany(
-                    "insert or ignore into field_value values(?, ?)",
-                    ((field, value) for value in sorted_values),
                 )
 
             local_db.execute(
