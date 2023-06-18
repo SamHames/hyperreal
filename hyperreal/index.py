@@ -343,6 +343,7 @@ class Index:
         workers = workers or self.pool._max_workers
 
         try:
+            self.db.execute("pragma foreign_keys=0")
             self.db.execute("begin")
         except sqlite3.OperationalError:
             raise IndexingError(
@@ -370,9 +371,9 @@ class Index:
             batch_doc_ids = []
             batch_doc_keys = []
             batch_size = 0
+            batch_no = 0
 
             futures = set()
-            to_merge = collections.defaultdict(list)
 
             self.logger.info("Beginning indexing.")
 
@@ -395,11 +396,13 @@ class Index:
                             temp_index,
                             skipgram_window_size,
                             write_lock,
+                            batch_no,
                         )
                     )
                     batch_doc_ids = []
                     batch_doc_keys = []
                     batch_size = 0
+                    batch_no += 1
 
                     # Be polite and avoid filling up the queue.
                     if len(futures) >= workers + 1:
@@ -420,16 +423,17 @@ class Index:
                         temp_index,
                         skipgram_window_size,
                         write_lock,
+                        batch_no,
                     )
                 )
 
             self.logger.info("Waiting for batches to complete.")
 
             # Zero out existing features, but don't reassign them
-            self.db.execute(
-                "update inverted_index set docs_count = 0, doc_ids = ?",
-                [BitMap()],
-            )
+            # self.db.execute(
+            #     "update inverted_index set docs_count = 0, doc_ids = ?",
+            #     [BitMap()],
+            # )
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -442,44 +446,44 @@ class Index:
             self.db.execute("attach ? as tempindex", [temp_index])
             detach = True
 
-            self.db.execute(
-                "create index tempindex.field_value on inverted_index_segment(field, value)"
-            )
+            # Turn off foreign keys temporarily, so we can use
+            # the simpler replace formulation for queries.
+            self.db.execute("pragma defer_foreign_keys=1")
 
-            # Ensure rows exists
-            self.db.execute(
-                """
-                insert or ignore into inverted_index(field, value, docs_count, doc_ids)
-                    select distinct field, value, 0, 0
-                    from inverted_index_segment
-                """
-            )
+            # This makes sure that sqlite can use the skipscan optimisation on
+            # this index.
+            self.db.execute("PRAGMA analysis_limit = 1000")
+            self.db.execute("analyze tempindex.inverted_index_segment")
 
-            # Actually populate the new values
-            self.db.execute(
-                """
-                with merged_segment as (
+            query = """
+                replace into inverted_index(field, value, docs_count, doc_ids)
                     select
                         field,
                         value,
                         sum(docs_count) as docs_count,
-                        doc_ids
+                        roaring_union(doc_ids) as doc_ids
                     from inverted_index_segment iis
                     group by field, value
-                )
+                """
+
+            # Actually populate the new values
+            self.db.execute(query)
+
+            # Empty fields that aren't in the newly indexed documents. Instead
+            # of deleting, they are kept to keep the feature_id constant.
+            self.db.execute(
+                """
                 update inverted_index set
-                    (docs_count, doc_ids) = (
-                        select
-                            docs_count,
-                            doc_ids
-                        from merged_segment ms
-                        where (ms.field, ms.value) = (
-                            inverted_index.field,
-                            inverted_index.value
-                        )
-                    )
-                where (field, value) in (select field, value from merged_segment)
+                    docs_count = 0,
+                    doc_ids = ?
+                where (field, value) not in (
+                    select
+                        field,
+                        value
+                    from field_value
+                )
                 """,
+                [BitMap()],
             )
 
             # Update docs_counts in the clusters
@@ -551,6 +555,7 @@ class Index:
             raise
 
         finally:
+            self.db.execute("pragma foreign_keys=1")
             manager.shutdown()
 
             if detach:
@@ -1539,11 +1544,12 @@ class Index:
 
 
 def _index_docs(
-    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock
+    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock, batch_no
 ):
     """Index all of the given docs into temp_db_path."""
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
+    local_db.execute("pragma journal_mode=WAL")
 
     try:
         # This is {field: {value: doc_ids, value2: doc_ids}}
@@ -1578,25 +1584,42 @@ def _index_docs(
                     batch[field][value].add(doc_id)
 
         with write_lock:
+            local_db.execute("pragma synchronous=0")
             local_db.execute("begin")
             local_db.execute(
                 """
+                create table if not exists field_value (
+                    field,
+                    value,
+                    primary key(field, value)
+                ) without rowid
+                """
+            )
+            local_db.execute(
+                """
                 CREATE table if not exists inverted_index_segment(
+                    batch_no,
                     field text,
                     value,
                     docs_count,
-                    doc_ids roaring_bitmap
-                )
+                    doc_ids roaring_bitmap,
+                    primary key (batch_no, field, value)
+                ) without rowid
                 """
             )
             for field, values in batch.items():
+                sorted_values = sorted(v for v in values if v is not None)
+
                 local_db.executemany(
-                    "insert into inverted_index_segment values(?, ?, ?, ?)",
+                    "insert into inverted_index_segment values(?, ?, ?, ?, ?)",
                     (
-                        (field, value, len(doc_ids), doc_ids)
-                        for value, doc_ids in values.items()
-                        if value is not None
+                        (batch_no, field, value, len(values[value]), values[value])
+                        for value in sorted_values
                     ),
+                )
+                local_db.executemany(
+                    "insert or ignore into field_value values(?, ?)",
+                    ((field, value) for value in sorted_values),
                 )
 
             local_db.execute(
