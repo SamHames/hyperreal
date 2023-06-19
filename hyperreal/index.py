@@ -371,7 +371,6 @@ class Index:
             batch_doc_ids = []
             batch_doc_keys = []
             batch_size = 0
-            batch_no = 0
 
             futures = set()
 
@@ -396,13 +395,11 @@ class Index:
                             temp_index,
                             skipgram_window_size,
                             write_lock,
-                            batch_no,
                         )
                     )
                     batch_doc_ids = []
                     batch_doc_keys = []
                     batch_size = 0
-                    batch_no += 1
 
                     # Be polite and avoid filling up the queue.
                     if len(futures) >= workers + 1:
@@ -423,7 +420,6 @@ class Index:
                         temp_index,
                         skipgram_window_size,
                         write_lock,
-                        batch_no,
                     )
                 )
 
@@ -449,11 +445,6 @@ class Index:
             # Turn off foreign keys temporarily, so we can use
             # the simpler replace formulation for queries.
             self.db.execute("pragma defer_foreign_keys=1")
-
-            # This makes sure that sqlite can use the skipscan optimisation on
-            # this index.
-            self.db.execute("PRAGMA analysis_limit = 1000")
-            self.db.execute("analyze tempindex.inverted_index_segment")
 
             query = """
                 replace into inverted_index(field, value, docs_count, doc_ids)
@@ -1527,7 +1518,7 @@ class Index:
 
 
 def _index_docs(
-    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock, batch_no
+    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock
 ):
     """Index all of the given docs into temp_db_path."""
 
@@ -1571,23 +1562,26 @@ def _index_docs(
             local_db.execute(
                 """
                 CREATE table if not exists inverted_index_segment(
-                    batch_no,
                     field text,
                     value,
                     docs_count,
-                    doc_ids roaring_bitmap,
-                    primary key (batch_no, field, value)
-                ) without rowid
+                    doc_ids roaring_bitmap
+                )
                 """
             )
-            for field, values in batch.items():
-                sorted_values = sorted(v for v in values if v is not None)
+
+            # Ensure we do all the inserts in sorted order as far as possible
+            field_order = sorted(batch.keys())
+
+            for field in field_order:
+                values = batch[field]
+                value_order = sorted(v for v in values if v is not None)
 
                 local_db.executemany(
-                    "insert into inverted_index_segment values(?, ?, ?, ?, ?)",
+                    "insert into inverted_index_segment values(?, ?, ?, ?)",
                     (
-                        (batch_no, field, value, len(values[value]), values[value])
-                        for value in sorted_values
+                        (field, value, len(values[value]), values[value])
+                        for value in value_order
                     ),
                 )
 
@@ -1603,10 +1597,17 @@ def _index_docs(
                 """
             )
 
+            # TODO: The data structure for this has the wrong layout to be
+            # able to work nicely in sorted order.
             for i, f in enumerate(skipgram_counts):
                 distance = i + 1
-                for field, item_as in f.items():
-                    for item_a, item_bs in item_as.items():
+                for field in field_order:
+                    item_as = f[field]
+                    a_order = sorted(item_as.keys())
+
+                    for item_a in a_order:
+                        item_bs = item_as[item_a]
+
                         local_db.executemany(
                             "INSERT into skipgram_count values(?, ?, ?, ?, ?)",
                             (
