@@ -442,13 +442,14 @@ class Index:
             self.db.execute("attach ? as tempindex", [temp_index])
             detach = True
 
-            # Turn off foreign keys temporarily, so we can use
-            # the simpler replace formulation for queries.
-            self.db.execute("pragma defer_foreign_keys=1")
-
             query = """
-                replace into inverted_index(field, value, docs_count, doc_ids)
+                replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
                     select
+                        (
+                            select feature_id
+                            from inverted_index ii
+                            where (ii.field, ii.value) = (iis.field, iis.value)
+                        ),
                         field,
                         value,
                         sum(docs_count) as docs_count,

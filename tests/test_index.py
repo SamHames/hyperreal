@@ -87,6 +87,22 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     assert total_docs == target_docs
     assert nnz == target_nnz
 
+    # Feature ids should remain the same across indexing runs
+    features_field_values = {
+        feature_id: (field, value)
+        for feature_id, field, value in i.db.execute(
+            "select feature_id, field, value from inverted_index"
+        )
+    }
+
+    i.index(doc_batch_size=10)
+
+    for feature_id, field, value in i.db.execute(
+            "select feature_id, field, value from inverted_index"
+        ):
+        assert (field, value) == features_field_values[feature_id]
+
+
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
 def test_model_creation(pool, example_index_path, n_clusters):
