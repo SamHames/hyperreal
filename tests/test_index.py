@@ -98,10 +98,9 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     i.index(doc_batch_size=10)
 
     for feature_id, field, value in i.db.execute(
-            "select feature_id, field, value from inverted_index"
-        ):
+        "select feature_id, field, value from inverted_index"
+    ):
         assert (field, value) == features_field_values[feature_id]
-
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
