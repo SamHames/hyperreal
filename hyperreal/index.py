@@ -1027,6 +1027,80 @@ class Index:
             for key, feature_scores in best_clusters.items()
         }
 
+    def _next_nearest_clusters(
+        self,
+        cluster_feature: dict[int, set[int]],
+        movable_features=None,
+        top_k=1,
+        group_test=True,
+        probe_query=None,
+    ):
+        """
+        Find the approximate next nearest cluster for each feature in this clustering.
+        """
+        cluster_ids = list(cluster_feature.keys())
+        self.random.shuffle(cluster_ids)
+
+        movable_features = movable_features or set.union(*cluster_feature.values())
+
+        n_batches = math.ceil(len(cluster_ids) ** 0.5)
+
+        # Group testing if there are enough batches to be worth while.
+        if group_test and n_batches > 2:
+            cluster_groups = [set(cluster_ids[i::n_batches]) for i in range(n_batches)]
+
+            group_features = {}
+            group_feature_checks = {}
+
+            for group in cluster_groups:
+                group_key = tuple(sorted(group))
+                this_group_features = set.union(
+                    *(cluster_feature[key] for key in group_key)
+                )
+
+                group_features[group_key] = this_group_features
+                group_feature_checks[group_key] = movable_features
+
+                # Handle features in the current group specially by generating specific smaller
+                # groups excluding the self cluster.
+                for cluster_key in group_key:
+                    subgroup_key = tuple(sorted(group - set([cluster_key])))
+                    subgroup_features = (
+                        this_group_features - cluster_feature[cluster_key]
+                    )
+                    subgroup_feature_checks = (
+                        cluster_feature[cluster_key] & movable_features
+                    )
+
+                    group_features[subgroup_key] = subgroup_features
+                    group_feature_checks[subgroup_key] = subgroup_feature_checks
+
+            best_groups = self._calculate_best_feature_moves(
+                group_features,
+                group_feature_checks,
+                probe_query=probe_query,
+                top_k=top_k,
+            )
+
+            cluster_feature_checks = collections.defaultdict(set)
+
+            # Convert best group results into individual cluster checks
+            for feature, groups in best_groups.items():
+                for _, group_key in groups:
+                    for cluster_key in group_key:
+                        cluster_feature_checks[cluster_key].add(feature)
+
+        # The dense testing case is much much simpler, but also much slower!
+        else:
+            cluster_feature_checks = {c: movable_features for c in cluster_ids}
+
+        return self._calculate_best_feature_moves(
+            cluster_feature,
+            cluster_feature_checks,
+            probe_query=probe_query,
+            top_k=top_k,
+        )
+
     def _refine_feature_groups(
         self,
         cluster_feature: dict[int, set[int]],
@@ -1228,68 +1302,17 @@ class Index:
             else:
                 dissolve_cluster_ids = set()
 
+            for cluster_id in dissolve_cluster_ids:
+                del cluster_feature[cluster_id]
+
             assigned_cluster_ids -= dissolve_cluster_ids
 
-            # Group testing for which specific cluster to check against. Note
-            # that features are not tested against the group containing their
-            # current cluster.
-
-            # Start by generating the randomised cluster groups, accounting
-            # for the dissolving clusters
-            cluster_ids = list(current_cluster_scores.keys() - dissolve_cluster_ids)
-            self.random.shuffle(cluster_ids)
-
-            n_batches = math.ceil(len(cluster_ids) ** 0.5)
-
-            if group_test and n_batches > 2:
-                cluster_groups = [
-                    set(cluster_ids[i::n_batches]) for i in range(n_batches)
-                ]
-
-                group_features = {}
-                group_feature_checks = {}
-
-                for group in cluster_groups:
-                    group_key = tuple(sorted(group))
-                    this_group_features = set.union(
-                        *(cluster_feature[key] for key in group_key)
-                    )
-
-                    group_features[group_key] = this_group_features
-                    group_feature_checks[group_key] = movable_features
-
-                    # Handle features in the current group specially by generating specific smaller
-                    # groups excluding the self cluster.
-                    for cluster_key in group_key:
-                        subgroup_key = tuple(sorted(group - set([cluster_key])))
-                        subgroup_features = (
-                            this_group_features - cluster_feature[cluster_key]
-                        )
-                        subgroup_feature_checks = (
-                            cluster_feature[cluster_key] - pinned_features
-                        )
-
-                        group_features[subgroup_key] = subgroup_features
-                        group_feature_checks[subgroup_key] = subgroup_feature_checks
-
-                best_groups = self._calculate_best_feature_moves(
-                    group_features, group_feature_checks, probe_query=probe_query
-                )
-
-                cluster_feature_checks = collections.defaultdict(set)
-
-                # Convert best group results into individual cluster checks
-                for feature, groups in best_groups.items():
-                    for _, group_key in groups:
-                        for cluster_key in group_key:
-                            cluster_feature_checks[cluster_key].add(feature)
-
-            else:
-                cluster_feature_checks = {c: movable_features for c in cluster_ids}
-
-            best_feature_clusters = self._calculate_best_feature_moves(
+            # Calculate possible moves given this clustering
+            best_feature_clusters = self._next_nearest_clusters(
                 cluster_feature,
-                cluster_feature_checks,
+                top_k=1,
+                group_test=group_test,
+                movable_features=movable_features,
                 probe_query=probe_query,
             )
 
@@ -1305,7 +1328,6 @@ class Index:
                 if current_cluster in dissolve_cluster_ids:
                     for feature_id, current_delta in zip(features, deltas):
                         new_cluster = best_feature_clusters[feature_id][0][1]
-                        cluster_feature[current_cluster].discard(feature_id)
                         cluster_feature[new_cluster].add(feature_id)
                         feature_cluster[feature_id] = new_cluster
 
@@ -1334,7 +1356,6 @@ class Index:
 
             for cluster_id in dissolve_cluster_ids:
                 del current_cluster_scores[cluster_id]
-                del cluster_feature[cluster_id]
 
             if not dissolve_cluster_ids:
                 if (moved_features / len(movable_features)) < tolerance:
