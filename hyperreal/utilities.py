@@ -1,6 +1,9 @@
+import heapq
 from html.parser import HTMLParser
 from io import StringIO
+import itertools
 import math
+import operator
 
 from pyroaring import BitMap
 import regex
@@ -209,3 +212,24 @@ def compute_bitslice(bitmaps):
             bitslice.append(carry)
 
     return matching, bitslice
+
+
+def weight_bitslice(bitslice):
+    """
+    Return an iterator of weights for each document in the bitslice.
+
+    """
+
+    # Can't be a lambda as we need to capture the layer eagerly
+    def slice_gen(bm, layer):
+        weight = 2**layer
+        for doc_id in bm:
+            yield (doc_id, weight)
+
+    # Returns them in merged order
+    ordered = heapq.merge(*(slice_gen(bm, i) for i, bm in enumerate(bitslice)))
+
+    grouped = itertools.groupby(ordered, key=operator.itemgetter(0))
+
+    for key, group in grouped:
+        yield key, sum(g[1] for g in group)
