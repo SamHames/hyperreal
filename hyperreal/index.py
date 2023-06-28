@@ -1968,6 +1968,7 @@ def _union_query(args):
 
     try:
         index = Index(index_db_path)
+        index.db.execute("begin")
         query = BitMap()
         weight = 0
 
@@ -1977,6 +1978,7 @@ def _union_query(args):
             weight += len(docs)
 
     finally:
+        index.db.execute("commit")
         index.close()
 
     return query_key, query, weight
