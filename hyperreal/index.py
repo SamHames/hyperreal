@@ -1357,17 +1357,17 @@ class Index:
             for cluster_id in dissolve_cluster_ids:
                 del current_cluster_scores[cluster_id]
 
+            self.logger.info(
+                f"Finished iteration {iteration + 1}/{iterations}, changed "
+                f"{len(changed_clusters)} clusters, moved {moved_features} features."
+            )
+
             if not dissolve_cluster_ids:
                 if (moved_features / len(movable_features)) < tolerance:
                     self.logger.info(
                         "Terminating refinement due to small number of feature moves."
                     )
                     break
-
-            self.logger.info(
-                f"Finished iteration {iteration + 1}/{iterations}, changed "
-                f"{len(changed_clusters)} clusters, moved {moved_features} features."
-            )
 
         return cluster_feature, new_cluster_ids
 
