@@ -1283,7 +1283,7 @@ class Index:
             total_objective = sum(r[2] for r in current_cluster_scores.values())
 
             self.logger.info(
-                f"Iteration {iteration}, current objective: {total_objective}"
+                f"Iteration {iteration + 1}, current objective: {total_objective}"
             )
 
             # Dissolve target low objective clusters for this iteration
