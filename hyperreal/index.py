@@ -1043,7 +1043,10 @@ class Index:
 
         movable_features = movable_features or set.union(*cluster_feature.values())
 
-        n_batches = math.ceil(len(cluster_ids) ** 0.5)
+        # If we're looking for more neighbours, test more batches so that we
+        # spend roughly the same amount of time looking at group tests vs
+        # feature tests.
+        n_batches = math.ceil((len(cluster_ids) * top_k) ** 0.5)
 
         # Group testing if there are enough batches to be worth while.
         if group_test and n_batches > 2:
@@ -1310,7 +1313,7 @@ class Index:
             # Calculate possible moves given this clustering
             best_feature_clusters = self._next_nearest_clusters(
                 cluster_feature,
-                top_k=1,
+                top_k=2,
                 group_test=group_test,
                 movable_features=movable_features,
                 probe_query=probe_query,
