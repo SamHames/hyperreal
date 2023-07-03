@@ -1836,7 +1836,7 @@ def measure_feature_contribution_to_cluster(
         only_once = cluster_union - covered_twice
 
         c = len(cluster_union)
-        objective = hits / (c + n_features)
+        objective = hits / (c + n_features) - (hits / (hits + n_features))
 
         # SECOND PHASE: compute the incremental change in objective from removing each
         # feature (alone) from the current cluster.
@@ -1865,7 +1865,9 @@ def measure_feature_contribution_to_cluster(
 
             # It's okay for the cluster to become empty - we'll just prune it.
             if old_c and intersects_with_other_feature:
-                old_objective = old_hits / (old_c + (n_features - 1))
+                old_objective = old_hits / (old_c + (n_features - 1)) - (
+                    old_hits / (old_hits + n_features - 1)
+                )
 
                 delta = objective - old_objective
 
@@ -1929,7 +1931,7 @@ def measure_add_features_to_cluster(
             cluster_union |= docs
 
         c = len(cluster_union)
-        objective = hits / (c + n_features)
+        objective = hits / (c + n_features) - (hits / (hits + n_features))
 
         # PHASE 2: Incremental delta from adding new features to the cluster.
         # Note: using an array to only manage two objects worth of de/serialisation
@@ -1948,7 +1950,9 @@ def measure_add_features_to_cluster(
             if docs.intersect(cluster_union):
                 new_hits = hits + feature_hits
                 new_c = docs.union_cardinality(cluster_union)
-                new_objective = new_hits / (new_c + (n_features + 1))
+                new_objective = new_hits / (new_c + (n_features + 1)) - (
+                    new_hits / (new_hits + n_features + 1)
+                )
 
                 delta = new_objective - objective
 
