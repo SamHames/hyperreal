@@ -10,6 +10,7 @@ requires = [
     "regex>=2022.4.24",
     "cherrypy>=18.6.0",
     "python-dateutil>=2.8.0",
+    "networkx>=3.0.0",
 ]
 
 extras = {"test": ["pytest", "black", "tox"]}
