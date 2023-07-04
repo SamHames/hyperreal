@@ -20,6 +20,7 @@ import sqlite3
 import tempfile
 from typing import Any, Union, Hashable, Optional
 
+import networkx as nx
 from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
 
 from hyperreal import db_utilities, corpus, _index_schema, utilities
@@ -1541,6 +1542,57 @@ class Index:
         self.db.execute("delete from cluster where feature_count = 0")
         self.db.execute("delete from changed_cluster")
 
+    @atomic()
+    def create_cluster_cooccurrence_graph(self, top_k=5, include_field_in_label=True):
+        """
+        Create a networkx graph showing cluster-cluster relationships.
+
+        In this graph each cluster of features is a node, and the edges
+        between nodes show cluster overlap. Edges are weighted by the jaccard
+        similarity of documents belonging to each cluster.
+
+        Nodes are labelled with the top_k features from that node.
+
+        """
+
+        graph = nx.Graph()
+        clusters = self.top_cluster_features(top_k=top_k)
+        # First add basic node information
+        for cluster_id, doc_count, top_features in clusters:
+            if include_field_in_label:
+                label = ", ".join(
+                    f"{field}:{value}" for _, field, value, _ in top_features
+                )
+            else:
+                label = ", ".join(value for _, field, value, _ in top_features)
+
+            graph.add_node(cluster_id, document_count=doc_count, label=label)
+
+        # The compute all the pairwise cluster details, in parallel.
+        futures = set()
+
+        for i, (cluster_id, _, _) in enumerate(clusters):
+            query = self.cluster_docs(cluster_id)
+            comparison_clusters = [c[0] for c in clusters[i + 1 :]]
+            futures.add(
+                self.pool.submit(
+                    _calculate_query_cooccurrence,
+                    self.db_path,
+                    cluster_id,
+                    query,
+                    comparison_clusters,
+                )
+            )
+
+        for future in cf.as_completed(futures):
+            cluster_id, weights = future.result()
+
+            for o_cluster, sim, cooc in weights:
+                if cooc > 0:
+                    graph.add_edge(cluster_id, o_cluster, weight=sim)
+
+        return graph
+
 
 def _index_docs(
     corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock
@@ -1647,6 +1699,26 @@ def _index_docs(
         local_db.close()
 
     return temp_db_path
+
+
+def _calculate_query_cooccurrence(index_db_path, key, query, cluster_ids):
+    idx = Index(index_db_path)
+
+    try:
+        idx.db.execute("begin")
+
+        weights = []
+
+        for cluster_id in cluster_ids:
+            cluster_docs = idx.cluster_docs(cluster_id)
+            sim = query.jaccard_index(cluster_docs)
+            cooc = query.intersection_cardinality(cluster_docs)
+            weights.append((cluster_id, sim, cooc))
+
+    finally:
+        idx.db.execute("commit")
+
+    return key, weights
 
 
 def _pivot_cluster_by_query_jaccard(args):

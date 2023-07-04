@@ -419,3 +419,16 @@ def test_pinning(example_index_path, pool):
 
     assert whole_cluster == {f[0] for f in index.cluster_features(1)}
     assert len(index.cluster_ids) == 16
+
+
+def test_graph_creation(example_index_path, pool):
+    """Test that graphs can be created properly and worked with."""
+    idx = hyperreal.index.Index(example_index_path, pool=pool)
+
+    n_clusters = 32
+    idx.initialise_clusters(n_clusters, min_docs=5)
+    idx.refine_clusters(iterations=3)
+
+    graph = idx.create_cluster_cooccurrence_graph(top_k=5)
+
+    assert len(graph.nodes) == 32
