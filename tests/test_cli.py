@@ -22,6 +22,7 @@ corpora_path = pathlib.Path("tests", "corpora")
 def test_plaintext_corpus(tmp_path):
     target_corpora_db = tmp_path / "test.db"
     target_index_db = tmp_path / "test_index.db"
+    target_graphml = tmp_path / "test.graphml"
 
     runner = CliRunner()
 
@@ -60,6 +61,16 @@ def test_plaintext_corpus(tmp_path):
             str(target_index_db),
         ],
     )
+
+    assert result.exit_code == 0
+
+    # Graph
+    result = runner.invoke(
+        cli.export,
+        ["graph", str(target_index_db), str(target_graphml)],
+    )
+
+    assert result.exit_code == 0
 
 
 @pytest.mark.skipif(

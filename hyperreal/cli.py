@@ -11,6 +11,7 @@ import multiprocessing as mp
 import os
 
 import click
+import networkx as nx
 
 import hyperreal.corpus
 import hyperreal.index
@@ -401,6 +402,44 @@ def model(
     doc_index.refine_clusters(
         iterations=iterations, target_clusters=clusters, tolerance=tolerance
     )
+
+
+@cli.group()
+def export():
+    pass
+
+
+@export.command(name="graph")
+@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
+@click.argument("graph_file", type=click.Path(dir_okay=False))
+@click.option(
+    "--top-k-features",
+    type=click.INT,
+    default=5,
+    help="The number of top features to include in the node labels.",
+)
+@click.option(
+    "--include-field-in-label",
+    type=click.BOOL,
+    default=True,
+    help="Set to off to turn off the inclusion of the feature's field "
+    "in the node labels. This is probably most useful when you only have "
+    "a single field in the index.",
+)
+def export_graph(index_db, graph_file, top_k_features, include_field_in_label):
+    """
+    Export the clustering in the given index into the give file as graphml.
+    """
+    if not hyperreal.index.Index.is_index_db(index_db):
+        raise ValueError(f"{index_db} is not a valid index file.")
+
+    mp_context = mp.get_context("spawn")
+    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+        idx = hyperreal.index.Index(index_db, pool=pool)
+        graph = idx.create_cluster_cooccurrence_graph(
+            top_k=top_k_features, include_field_in_label=include_field_in_label
+        )
+        nx.write_graphml(graph, graph_file)
 
 
 @cli.command()
