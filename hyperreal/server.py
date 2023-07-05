@@ -270,6 +270,7 @@ class Index:
     feature = FeatureOverview()
 
     @cherrypy.expose
+    @cherrypy.config(**{"response.stream": True})
     def index(
         self,
         index_id,
@@ -282,6 +283,8 @@ class Index:
         template = templates.get_template("index.html")
 
         rendered_docs = []
+        total_docs = 0
+        query = None
         highlight_cluster_id = None
         highlight_feature_id = None
 
@@ -292,24 +295,13 @@ class Index:
 
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
-            clusters = cherrypy.request.index.pivot_clusters_by_query(
-                query, scoring=scoring, top_k=int(top_k_features)
-            )
-
-            if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.render_docs(
-                    query, random_sample_size=int(exemplar_docs)
-                )
-
-            total_docs = len(query)
             highlight_feature_id = int(feature_id)
-
-            visible_features = [
-                feature[0] for _, _, features in clusters for feature in features
-            ]
 
         elif cluster_id is not None:
             query = cherrypy.request.index.cluster_docs(int(cluster_id))
+            highlight_cluster_id = int(cluster_id)
+
+        if query:
             clusters = cherrypy.request.index.pivot_clusters_by_query(
                 query, scoring=scoring, top_k=int(top_k_features)
             )
@@ -320,20 +312,14 @@ class Index:
                 )
 
             total_docs = len(query)
-            highlight_cluster_id = int(cluster_id)
-
-            visible_features = [
-                feature[0] for _, _, features in clusters for feature in features
-            ]
 
         else:
             clusters = cherrypy.request.index.top_cluster_features(
                 top_k=int(top_k_features)
             )
             total_docs = 0
-            visible_features = None
 
-        return template.render(
+        return template.generate(
             clusters=clusters,
             total_docs=total_docs,
             rendered_docs=rendered_docs,
@@ -343,7 +329,6 @@ class Index:
             index_id=index_id,
             highlight_feature_id=highlight_feature_id,
             highlight_cluster_id=highlight_cluster_id,
-            visible_features=visible_features,
         )
 
     @cherrypy.expose

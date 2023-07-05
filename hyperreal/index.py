@@ -832,13 +832,22 @@ class Index:
             )
         ]
 
+        future = self.pool.submit(
+            _pivot_clusters_by_query, self.db_path, query, cluster_ids
+        )
+        process_order = future.result()
+
         if scoring == "jaccard":
-            work = [
-                (self.db_path, query, cluster_id, top_k) for cluster_id in cluster_ids
+            futures = [
+                self.pool.submit(
+                    _pivot_cluster_features_by_query_jaccard,
+                    self.db_path,
+                    query,
+                    cluster_id,
+                    top_k,
+                )
+                for _, cluster_id in process_order
             ]
-            pivoted = (
-                r for r in self.pool.map(_pivot_cluster_by_query_jaccard, work) if r[1]
-            )
 
         else:
             raise ValueError(
@@ -846,17 +855,7 @@ class Index:
                 "Only jaccard is currently supported."
             )
 
-        clusters = [
-            (r[0][1], r[0][0], r[1])
-            for r in sorted(
-                pivoted,
-                reverse=True,
-                key=lambda r: r[0],
-            )
-        ]
-
-        for cluster in clusters:
-            yield cluster
+        return (future.result() for future in futures)
 
     def cluster_features(self, cluster_id, top_k=2**62):
         """
@@ -1724,15 +1723,41 @@ def _calculate_query_cooccurrence(index_db_path, key, query, cluster_ids):
     return key, weights
 
 
-def _pivot_cluster_by_query_jaccard(args):
-    index_db_path, query, cluster_id, top_k = args
-    index = Index(index_db_path)
+def _pivot_clusters_by_query(index_db_path, query, cluster_ids):
+    """
+    Return the similarity of the selected clusters with the given query.
+
+    Results are ordered most to least similar, clusters with no intersection are
+    discarded altogether.
+
+    """
+
+    idx = Index(index_db_path)
+
+    idx.db.execute("begin")
+
+    similarities = []
+
+    for cluster_id in cluster_ids:
+        sim = query.jaccard_index(idx.cluster_docs(cluster_id))
+
+        if sim > 0:
+            similarities.append((sim, cluster_id))
+
+    idx.db.execute("commit")
+    idx.close()
+
+    return sorted(similarities, reverse=True)
+
+
+def _pivot_cluster_features_by_query_jaccard(index_db_path, query, cluster_id, top_k):
+    idx = Index(index_db_path)
 
     results = [(0, -1, "", "")] * top_k
 
     q = len(query)
 
-    search_upper = index.db.execute(
+    search_upper = idx.db.execute(
         """
         select
             feature_cluster.feature_id,
@@ -1758,7 +1783,7 @@ def _pivot_cluster_by_query_jaccard(args):
             results, (query.jaccard_index(docs), feature_id, field, value)
         )
 
-    search_upper = index.db.execute(
+    search_upper = idx.db.execute(
         """
         select
             feature_cluster.feature_id,
@@ -1788,18 +1813,12 @@ def _pivot_cluster_by_query_jaccard(args):
         ((*r[1:], r[0]) for r in results if r[0] > 0), reverse=True, key=lambda r: r[3]
     )
 
-    # Finally compute the similarity of the query with the cluster_union.
-    cluster_union = list(
-        index.db.execute(
-            "select doc_ids from cluster where cluster_id = ?", [cluster_id]
-        )
-    )[0][0]
+    # Finally compute the similarity of the query with the cluster.
+    similarity = query.jaccard_index(idx.cluster_docs(cluster_id))
 
-    similarity = query.jaccard_index(cluster_union)
+    idx.close()
 
-    index.close()
-
-    return (similarity, cluster_id), results
+    return cluster_id, similarity, results
 
 
 def measure_feature_contribution_to_cluster(
