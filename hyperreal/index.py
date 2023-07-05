@@ -1117,7 +1117,8 @@ class Index:
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.01,
-        acceptance_probability: float = 0.75,
+        acceptance_probability: float = 0.9,
+        top_k: int = 2,
     ) -> tuple[dict[int, set[int]], set[int]]:
         """
         Low level function for iteratively refining a feature clustering.
@@ -1153,8 +1154,13 @@ class Index:
         iteration.
 
         acceptance_probability: the probability a move that is estimated to
-            improve the score will be accepted.
+        improve the score will be accepted. This interacts with the top_k
+        parameter - the top_k possible moves will be processed in order from
+        best move to worst move. A lower acceptance_probability and a larger
+        top_k result in less greedy exploration of the solution space.
 
+        top_k: the number of nearest neighbour clusters to consider as move
+        candidates.
         """
 
         target_clusters = target_clusters or len(cluster_feature)
@@ -1316,7 +1322,7 @@ class Index:
             # Calculate possible moves given this clustering
             best_feature_clusters = self._next_nearest_clusters(
                 cluster_feature,
-                top_k=2,
+                top_k=top_k,
                 group_test=group_test,
                 movable_features=movable_features,
                 probe_query=probe_query,
@@ -1348,17 +1354,24 @@ class Index:
                             feature_id
                         ][0]
 
-                        if (
-                            comparison_delta >= current_delta
-                            and self.random.random() < acceptance_probability
-                        ):
-                            cluster_feature[current_cluster].discard(feature_id)
-                            cluster_feature[comparison_cluster].add(feature_id)
-                            feature_cluster[feature_id] = comparison_cluster
+                        comparisons = best_feature_clusters[feature_id]
 
-                            changed_clusters.add(comparison_cluster)
+                        for comparison_delta, comparison_cluster in comparisons:
+                            # Because the comparisons are sorted in descending
+                            # order, there's no point checking anything
+                            # else.
+                            if comparison_delta <= current_delta:
+                                break
 
-                            moved_features += 1
+                            elif self.random.random() < acceptance_probability:
+                                cluster_feature[current_cluster].discard(feature_id)
+                                cluster_feature[comparison_cluster].add(feature_id)
+                                feature_cluster[feature_id] = comparison_cluster
+
+                                changed_clusters.add(comparison_cluster)
+
+                                moved_features += 1
+                                break
 
             for cluster_id in dissolve_cluster_ids:
                 del current_cluster_scores[cluster_id]
