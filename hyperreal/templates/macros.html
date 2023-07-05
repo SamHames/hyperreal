@@ -26,7 +26,13 @@
 
     {% if context == "index" %}
     <div class="cluster-footer">
-        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}{{ '/?feature_id={}'.format(highlight_feature_id) if highlight_feature_id else '' }}">See all</a>
+        {% if highlight_feature_id is not none %}
+        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}/?feature_id={{ highlight_feature_id }}">Intersect selected feature</a>
+        {% elif highlight_cluster_id is not none %}
+        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}/?filter_cluster_id={{ highlight_cluster_id }}">Intersect selected cluster</a>
+        {% else %}
+        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}"/>See  all in cluster</a>
+        {% endif %}
         <a href="/index/{{ index_id }}/?cluster_id={{ cluster_id }}">Pivot</a>
         <details>
             <summary>Edit</summary>
