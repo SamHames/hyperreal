@@ -833,9 +833,10 @@ class Index:
         ]
 
         future = self.pool.submit(
-            _pivot_clusters_by_query, self.db_path, query, cluster_ids
+            _calculate_query_cluster_cooccurrence, self.db_path, 0, query, cluster_ids
         )
-        process_order = future.result()
+        _, weights = future.result()
+        process_order = sorted(weights, key=lambda x: x[1], reverse=True)
 
         if scoring == "jaccard":
             futures = [
@@ -845,8 +846,9 @@ class Index:
                     query,
                     cluster_id,
                     top_k,
+                    inter,
                 )
-                for _, cluster_id in process_order
+                for cluster_id, _, inter in process_order
             ]
 
         else:
@@ -1116,7 +1118,7 @@ class Index:
         pinned_features: Optional[Iterable[int]] = None,
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
-        tolerance: float = 0.01,
+        tolerance: float = 0.05,
         acceptance_probability: float = 0.9,
         top_k: int = 2,
     ) -> tuple[dict[int, set[int]], set[int]]:
@@ -1149,8 +1151,8 @@ class Index:
 
         tolerance: specifies a termination tolerance. If fewer than
         tolerance * total_features features move in an iteration, terminate
-        early. The default is set at 0.01, or 1% - the model is considered
-        converged if less than 1% of the features have moved during an
+        early. The default is set at 0.05 - the model is considered
+        converged if less than 5% of the features have moved during an
         iteration.
 
         acceptance_probability: the probability a move that is estimated to
@@ -1397,7 +1399,7 @@ class Index:
         cluster_ids: Optional[Sequence[int]] = None,
         target_clusters: Optional[int] = None,
         minimum_cluster_features: int = 1,
-        tolerance: float = 0.01,
+        tolerance: float = 0.05,
     ):
         """
         Refine the feature clusters for the current model.
@@ -1591,7 +1593,7 @@ class Index:
             comparison_clusters = [c[0] for c in clusters[i + 1 :]]
             futures.add(
                 self.pool.submit(
-                    _calculate_query_cooccurrence,
+                    _calculate_query_cluster_cooccurrence,
                     self.db_path,
                     cluster_id,
                     query,
@@ -1602,9 +1604,8 @@ class Index:
         for future in cf.as_completed(futures):
             cluster_id, weights = future.result()
 
-            for o_cluster, sim, cooc in weights:
-                if cooc > 0:
-                    graph.add_edge(cluster_id, o_cluster, weight=sim)
+            for o_cluster, sim, inter in weights:
+                graph.add_edge(cluster_id, o_cluster, weight=sim)
 
         return graph
 
@@ -1716,7 +1717,7 @@ def _index_docs(
     return temp_db_path
 
 
-def _calculate_query_cooccurrence(index_db_path, key, query, cluster_ids):
+def _calculate_query_cluster_cooccurrence(index_db_path, key, query, cluster_ids):
     idx = Index(index_db_path)
 
     try:
@@ -1726,9 +1727,11 @@ def _calculate_query_cooccurrence(index_db_path, key, query, cluster_ids):
 
         for cluster_id in cluster_ids:
             cluster_docs = idx.cluster_docs(cluster_id)
-            sim = query.jaccard_index(cluster_docs)
-            cooc = query.intersection_cardinality(cluster_docs)
-            weights.append((cluster_id, sim, cooc))
+            inter = query.intersection_cardinality(cluster_docs)
+
+            if inter:
+                sim = query.jaccard_index(cluster_docs)
+                weights.append((cluster_id, sim, inter))
 
     finally:
         idx.db.execute("commit")
@@ -1736,91 +1739,30 @@ def _calculate_query_cooccurrence(index_db_path, key, query, cluster_ids):
     return key, weights
 
 
-def _pivot_clusters_by_query(index_db_path, query, cluster_ids):
-    """
-    Return the similarity of the selected clusters with the given query.
-
-    Results are ordered most to least similar, clusters with no intersection are
-    discarded altogether.
-
-    """
-
-    idx = Index(index_db_path)
-
-    idx.db.execute("begin")
-
-    similarities = []
-
-    for cluster_id in cluster_ids:
-        sim = query.jaccard_index(idx.cluster_docs(cluster_id))
-
-        if sim > 0:
-            similarities.append((sim, cluster_id))
-
-    idx.db.execute("commit")
-    idx.close()
-
-    return sorted(similarities, reverse=True)
-
-
-def _pivot_cluster_features_by_query_jaccard(index_db_path, query, cluster_id, top_k):
+def _pivot_cluster_features_by_query_jaccard(
+    index_db_path, query, cluster_id, top_k, cluster_inter
+):
     idx = Index(index_db_path)
 
     results = [(0, -1, "", "")] * top_k
 
     q = len(query)
 
-    search_upper = idx.db.execute(
-        """
-        select
-            feature_cluster.feature_id,
-            field,
-            value,
-            feature_cluster.docs_count,
-            doc_ids
-        from feature_cluster
-        inner join inverted_index using(feature_id)
-        where cluster_id = ?
-            and feature_cluster.docs_count >= ?
-        order by feature_cluster.docs_count
-        """,
-        [cluster_id, q],
+    features = (
+        (min(f[-1], cluster_inter) / (q + f[-1] - min(f[-1], cluster_inter)), *f)
+        for f in idx.cluster_features(cluster_id)
     )
 
-    for feature_id, field, value, docs_count, docs in search_upper:
+    search_order = sorted(features, reverse=True)
+
+    # TODO: find further ways to accelerate this - it seems like most features
+    # end up being checked when the similarity is low.
+    for max_threshold, f_id, field, value, docs_count in search_order:
         # Early break if the length threshold can't be reached.
-        if q / docs_count <= results[0][0]:
+        if max_threshold < results[0][0]:
             break
 
-        heapq.heappushpop(
-            results, (query.jaccard_index(docs), feature_id, field, value)
-        )
-
-    search_upper = idx.db.execute(
-        """
-        select
-            feature_cluster.feature_id,
-            field,
-            value,
-            feature_cluster.docs_count,
-            doc_ids
-        from feature_cluster
-        inner join inverted_index using(feature_id)
-        where cluster_id = ?
-            and feature_cluster.docs_count < ?
-        order by feature_cluster.docs_count desc
-        """,
-        [cluster_id, q],
-    )
-
-    for feature_id, field, value, docs_count, docs in search_upper:
-        # Early break if the length threshold can't be reached.
-        if docs_count / q <= results[0][0]:
-            break
-
-        heapq.heappushpop(
-            results, (query.jaccard_index(docs), feature_id, field, value)
-        )
+        heapq.heappushpop(results, (query.jaccard_index(idx[f_id]), f_id, field, value))
 
     results = sorted(
         ((*r[1:], r[0]) for r in results if r[0] > 0), reverse=True, key=lambda r: r[3]
