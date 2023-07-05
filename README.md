@@ -88,22 +88,22 @@ with open('corpus.txt', 'r') as f:
 
 # Index that corpus - note that we need to pass the corpus object for
 # initialisation.
-i = index.Index('corpus_index.db', corpus=c)
+idx = index.Index('corpus_index.db', corpus=c)
 # This only needs to be done once, unless the corpus changes.
-i.index()
+idx.index()
 
 # Create a model on this index, with 128 clusters and only including features
 # that match at least 10 documents.
-i.initialise_clusters(n_clusters=128, min_docs=10)
+idx.initialise_clusters(n_clusters=128, min_docs=10)
 # Refine the model for 10 iterations. Note that you can continue to refine
 # the model without initialising the clusters.
-i.refine_clusters(iterations=10)
+idx.refine_clusters(iterations=10)
 
 # Inspect the output of the model using the index instance (currently quite
 # limited). This will print the top 10 most frequent features in each
 # cluster.
-for cluster_id in i.cluster_ids:
-    cluster_features = i.cluster_features(cluster_id)
+for cluster_id in idx.cluster_ids:
+    cluster_features = idx.cluster_features(cluster_id)
     for feature in cluster_features[:10]:
         print(feature)
 
@@ -111,15 +111,17 @@ for cluster_id in i.cluster_ids:
 # both apples AND oranges in the text field.
 q = i[('text', 'apples')] & i[('text', 'oranges')]
 # Lookup all of the documents in the corpus that match this query.
-docs = i.get_docs(q)
+docs = idx.get_docs(q)
 
 # 'Pivot' the features in the index with respect to all cluster in the model.
 #  This will show the top 10 features in each cluster that are similar to the
 #  query.
-i.pivot_clusters_by_query(query, top_k=10)
+for cluster_detail in idx.pivot_clusters_by_query(query, top_k=10):
+    print(cluster)
 
 # This will show the top 10 features for a selected set of cluster_ids.
-i.pivot_clusters_by_query(query, cluster_ids=[3,5,7], top_k=10)
+for cluster_detail in idx.pivot_clusters_by_query(query, cluster_ids=[3,5,7], top_k=10):
+    print(cluster_detail)
 
 ```
 
