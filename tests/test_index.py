@@ -259,7 +259,7 @@ def test_pivoting(example_index_path, pool):
 
     # Test early/late truncation in each direction with large and small
     # features.
-    for scoring in ("jaccard", "chi_squared"):
+    for scoring in ("jaccard",):
         for query in [("text", "the"), ("text", "denied")]:
             pivoted = index.pivot_clusters_by_query(
                 index[query], top_k=2, scoring=scoring

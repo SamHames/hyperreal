@@ -808,12 +808,20 @@ class Index:
         """
         Sort all clusters and features within clusters by similarity with the probe query.
 
+        This function is optimised to yield top ranking results as early as possible,
+        to enable streaming outputs as soon as they're ready, such as in the web interface.
+
+        Returns:
+
+            Generator of clusters and features sorted by similarity with the
+            associated query.
+
         Args:
             query: the query object as a bitmap of document IDs
             cluster_ids: an optional sequence
             top_k: the number of top features to return in each cluster
-            scoring: The similarity scoring function, currently "jaccard"
-                and "chi_squared" are supported.
+            scoring: The similarity scoring function, currently only "jaccard"
+                is supported.
 
         """
 
@@ -832,16 +840,10 @@ class Index:
                 r for r in self.pool.map(_pivot_cluster_by_query_jaccard, work) if r[1]
             )
 
-        elif scoring == "chi_squared":
-            N = list(self.db.execute("select count(*) from doc_key"))[0][0]
-            work = [
-                (self.db_path, query, cluster_id, top_k, N)
-                for cluster_id in cluster_ids
-            ]
-            pivoted = (
-                r
-                for r in self.pool.map(_pivot_cluster_by_query_chi_squared, work)
-                if r[1]
+        else:
+            raise ValueError(
+                f"{scoring} method is not supported. "
+                "Only jaccard is currently supported."
             )
 
         clusters = [
@@ -853,7 +855,8 @@ class Index:
             )
         ]
 
-        return clusters
+        for cluster in clusters:
+            yield cluster
 
     def cluster_features(self, cluster_id, top_k=2**62):
         """
@@ -1793,60 +1796,6 @@ def _pivot_cluster_by_query_jaccard(args):
     )[0][0]
 
     similarity = query.jaccard_index(cluster_union)
-
-    index.close()
-
-    return (similarity, cluster_id), results
-
-
-def _pivot_cluster_by_query_chi_squared(args):
-    index_db_path, query, cluster_id, top_k, N = args
-    index = Index(index_db_path)
-
-    results = [(0, -1, "", "")] * top_k
-
-    q = len(query)
-
-    search = index.db.execute(
-        """
-        select
-            feature_cluster.feature_id,
-            field,
-            value,
-            feature_cluster.docs_count,
-            doc_ids
-        from feature_cluster
-        inner join inverted_index using(feature_id)
-        where cluster_id = ?
-        """,
-        [cluster_id],
-    )
-
-    for feature_id, field, value, docs_count, docs in search:
-        f = docs_count
-
-        # These are the cells in the 2x2 contingency table
-        A = query.intersection_cardinality(docs)
-        B = q - A
-        C = f - A
-        D = N - q - f + A
-
-        score = (((A * D) - (B * C)) ** 2) * N / ((A + B) * (C + D) * (B + D) * (A + C))
-
-        heapq.heappushpop(results, (score, feature_id, field, value))
-
-    results = sorted(
-        ((*r[1:], r[0]) for r in results if r[1] >= 0), reverse=True, key=lambda r: r[3]
-    )
-
-    # Finally compute the similarity of the query with the cluster_union.
-    cluster_union = list(
-        index.db.execute(
-            "select doc_ids from cluster where cluster_id = ?", [cluster_id]
-        )
-    )[0][0]
-
-    similarity = results[0][-1]
 
     index.close()
 
