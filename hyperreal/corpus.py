@@ -13,6 +13,7 @@ import abc
 from collections import defaultdict
 import datetime as dt
 import gzip
+import html
 from html.parser import HTMLParser
 import json
 import re
