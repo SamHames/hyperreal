@@ -94,11 +94,13 @@ class Cluster:
                 query = cherrypy.request.index.cluster_docs(filter_cluster_id)
 
         if query:
-            sorted_features = cherrypy.request.index.pivot_clusters_by_query(
-                query,
-                cluster_ids=[cluster_id],
-                top_k=n_features,
-                scoring=scoring,
+            sorted_features = list(
+                cherrypy.request.index.pivot_clusters_by_query(
+                    query,
+                    cluster_ids=[cluster_id],
+                    top_k=n_features,
+                    scoring=scoring,
+                )
             )
 
             # Make sure that there are actually matching features.
