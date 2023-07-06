@@ -48,6 +48,8 @@ def social_media_tokens(entry):
         "", entry.translate(curly_quote_translator).lower()
     )
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    # This is a terminator token, to make sure that collocations aren't
+    # identified across textual boundaries.
     tokens.append(None)
     return tokens
 
@@ -55,40 +57,10 @@ def social_media_tokens(entry):
 def tokens(entry):
     cleaned = entry.lower()
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    # This is a terminator token, to make sure that collocations aren't
+    # identified across textual boundaries.
     tokens.append(None)
     return tokens
-
-
-class HTMLTextLines(HTMLParser):
-    """
-    Parser for extracting the text from the data elements of given HTML.
-
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.reset()
-        self.strict = False
-        self.convert_charrefs = True
-        self.lines = []
-
-    def handle_data(self, d):
-        self.lines.append(d)
-
-    def get_lines(self):
-        return self.lines
-
-
-def text_from_html(html):
-    """
-    Returns a list of the text contained in the data elements of the given HTML string.
-
-    """
-    s = HTMLTextLines()
-    s.feed(html)
-    lines = s.get_lines()
-    s.close()
-    return lines
 
 
 def bstm(matching, bitslice, top_k):
