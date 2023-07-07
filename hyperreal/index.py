@@ -1200,6 +1200,47 @@ class Index:
             top_k=top_k,
         )
 
+    def _create_subcluster(
+        self,
+        cluster_feature,
+        refine_parameters: Optional[dict] = None,
+        threads: int = 8,
+    ):
+        """
+        An extension to _refine_feature_groups that computes many feature_clusterings.
+
+        A small threadpool is created to manage running a couple of the
+        subclusterings in parallel - each required subclustering is performed
+        to completion in turn to ensure data locality.
+
+        """
+
+        refine_parameters = refine_parameters or {}
+
+        with cf.ThreadPoolExecutor(threads) as threadpool:
+            futures = []
+            cluster_order = []
+
+            for cluster_id, features in cluster_feature.items():
+                # TODO: skip small enough clusters.
+                target_clusters = math.ceil(len(features) ** 0.5)
+                refine_parameters["target_clusters"] = target_clusters
+                futures.append(
+                    threadpool.submit(
+                        self._refine_feature_groups,
+                        {cluster_id: features},
+                        **refine_parameters,
+                    )
+                )
+                cluster_order.append(cluster_id)
+
+            subclusters = {
+                cluster_id: f.result()[0]
+                for cluster_id, f in zip(cluster_order, futures)
+            }
+
+        return subclusters
+
     def _refine_feature_groups(
         self,
         cluster_feature: dict[int, set[int]],
