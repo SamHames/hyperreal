@@ -72,6 +72,19 @@ def test_plaintext_corpus(tmp_path):
 
     assert result.exit_code == 0
 
+    # Graph
+    result = runner.invoke(
+        cli.export,
+        [
+            "graph",
+            str(target_index_db),
+            str(target_graphml),
+            "--exclude-field-in-label",
+        ],
+    )
+
+    assert result.exit_code == 0
+
 
 @pytest.mark.skipif(
     os.environ.get("RUNNING_IN_CI", False),

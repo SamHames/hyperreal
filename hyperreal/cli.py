@@ -419,16 +419,14 @@ def export():
     help="The number of top features to include in the node labels.",
 )
 @click.option(
-    "--include-field-in-label",
-    type=click.BOOL,
+    "--include-field-in-label/--exclude-field-in-label",
     default=True,
-    help="Set to off to turn off the inclusion of the feature's field "
-    "in the node labels. This is probably most useful when you only have "
-    "a single field in the index.",
+    help="Include or exclude the field in node labels. This can be used "
+    "to exclude showing fields when you only have a single field in the model.",
 )
 def export_graph(index_db, graph_file, top_k_features, include_field_in_label):
     """
-    Export the clustering in the given index into the give file as graphml.
+    Export the clustering in the given index into the given file as graphml.
     """
     if not hyperreal.index.Index.is_index_db(index_db):
         raise ValueError(f"{index_db} is not a valid index file.")
