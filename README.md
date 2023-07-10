@@ -27,7 +27,7 @@ use cases:
 
 - as a command line application
 - as a Python library
-- via the built in web application
+- as a local web application
 
 All of hyperreal's functionality is available from the Python library, but you
 will need to write Python code to use it directly. The command line interface
@@ -52,7 +52,7 @@ following resources useful:
 - [Open Water Foundation resources for Windows](https://learn.openwaterfoundation.org/owf-learn-windows-shell/)
 
 ```
-# Create a corpus database from the plaintext file
+# Create a corpus database from a plaintext file
 hyperreal plaintext-corpus create corpus.txt corpus.db
 
 # Create an index from the corpus
@@ -117,7 +117,7 @@ docs = idx.get_docs(q)
 #  This will show the top 10 features in each cluster that are similar to the
 #  query.
 for cluster_detail in idx.pivot_clusters_by_query(query, top_k=10):
-    print(cluster)
+    print(cluster_detail)
 
 # This will show the top 10 features for a selected set of cluster_ids.
 for cluster_detail in idx.pivot_clusters_by_query(query, cluster_ids=[3,5,7], top_k=10):
