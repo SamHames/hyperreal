@@ -176,6 +176,31 @@ def test_model_editing(example_index_path, pool):
     assert len(index.cluster_ids) == 13
 
 
+def test_model_structured_sampling(example_index_path, pool):
+    idx = hyperreal.index.Index(example_index_path, pool=pool)
+
+    idx.initialise_clusters(8, min_docs=5)
+    idx.refine_clusters(iterations=5)
+
+    cluster_sample, sample_clusters = idx.structured_doc_sample(docs_per_cluster=2)
+
+    # Should only a specific number of documents sampled - note that this isn't
+    # guaranteed when docs_per_cluster is larger than clusters in the dataset.
+    assert (
+        len(BitMap.union(*cluster_sample.values()))
+        == len(BitMap.union(*sample_clusters.values()))
+        == 16
+    )
+
+    assert sum(len(docs) for docs in sample_clusters.values()) >= 16
+
+    cluster_sample, sample_clusters = idx.structured_doc_sample(
+        docs_per_cluster=2, cluster_ids=idx.cluster_ids[:2]
+    )
+
+    assert len(cluster_sample) == 2
+
+
 def test_querying(example_index_corpora_path, pool):
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
     index = hyperreal.index.Index(

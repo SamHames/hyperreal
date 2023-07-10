@@ -621,6 +621,53 @@ class Index:
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_table(doc_keys)
 
+    @atomic()
+    def structured_doc_sample(self, docs_per_cluster=100, cluster_ids=None):
+        """
+        Create a sample of documents, using the current clustering as a sampling
+        structure.
+
+        By default 100 documents will be sampled from each cluster - sampling can be
+        disabled by setting docs_per_cluster to 0.
+
+        Optionally specify specific clusters to sample from using `cluster_ids`,
+        otherwise all clusters will be sampled.
+
+        Documents will be sampled from clusters in order of increasing frequency, and
+        will be sampled without replacement.
+
+        Will return a mapping of cluster_ids to sampled documents, and also a map of all
+        clusters for each of those documents.
+
+        """
+        all_clusters = self.top_cluster_features(top_k=0)
+        cluster_order = reversed(all_clusters)
+
+        cluster_ids = set(cluster_ids or self.cluster_ids)
+
+        already_sampled = BitMap()
+        cluster_samples = dict()
+
+        # Per cluster samples
+        for cluster_id, _, _ in cluster_order:
+            if cluster_id in cluster_ids:
+                cluster_docs = self.cluster_docs(cluster_id) - already_sampled
+                if docs_per_cluster > 0:
+                    sample = self.sample_bitmap(cluster_docs, docs_per_cluster)
+                else:
+                    sample = cluster_docs
+                cluster_samples[cluster_id] = sample
+                already_sampled |= sample
+
+        # Clusters for all of the sampled documents.
+        sample_clusters = {
+            cluster_id: c
+            for cluster_id, _, _ in all_clusters
+            if (c := already_sampled & self.cluster_docs(cluster_id))
+        }
+
+        return cluster_samples, sample_clusters
+
     def indexed_field_summary(self):
         """
         Return a summary tables of the indexed fields.
