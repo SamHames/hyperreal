@@ -74,15 +74,6 @@ class BaseCorpus(Protocol):
         """
         pass
 
-    @abc.abstractmethod
-    def serialize(self):
-        pass
-
-    @classmethod
-    @abc.abstractmethod
-    def deserialize(cls, state):
-        pass
-
     def close(self):
         pass
 
@@ -94,7 +85,7 @@ class BaseCorpus(Protocol):
 
 
 @runtime_checkable
-class WebAppCorpus(BaseCorpus, Protocol):
+class WebRenderableCorpus(BaseCorpus, Protocol):
     @abc.abstractmethod
     def render_docs_html(self, doc_keys):
         """Render documents into a list of HTML strings."""
@@ -102,9 +93,9 @@ class WebAppCorpus(BaseCorpus, Protocol):
 
 
 @runtime_checkable
-class SpreadsheetCorpus(BaseCorpus, Protocol):
+class TableRenderableCorpus(BaseCorpus, Protocol):
     @abc.abstractmethod
-    def render_docs_spreadsheet(self, doc_keys) -> Sequence[tuple[Any, dict[str, str]]]:
+    def render_docs_table(self, doc_keys) -> Sequence[tuple[Any, dict[str, Any]]]:
         """
         Render a series of documents into a form suitable for a spreadsheet.
 
@@ -144,13 +135,6 @@ class SqliteBackedCorpus(BaseCorpus):
 
     def __setstate__(self, db_path):
         self.__init__(db_path)
-
-    def serialize(self):
-        return self.db_path
-
-    @classmethod
-    def deserialize(cls, data):
-        return cls(data)
 
     def close(self):
         if self._db is not None:
@@ -229,7 +213,7 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         """Return the given documents as HTML."""
         return [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
 
-    def render_docs_spreadsheet(self, doc_keys):
+    def render_docs_table(self, doc_keys):
         """
         Return the documents for rendering in a spreadsheet or table.
 
@@ -544,7 +528,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         <details>
             <summary>{{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}: "{{ base_fields["QuestionTitle"] }}"</summary>
 
-            <a href="{{ '{}/questions/{}'.format(base_fields["site_url"], base_fields["Id"])  }}">Live Link</a>
+            <a href="{{ base_fields["LiveLink"] }}">Live Link</a>
 
             {{ base_fields["Body"] }}
 
@@ -617,7 +601,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     post.Body,
                     Post.ParentId,
                     coalesce(Post.Title, parent.Title) as QuestionTitle,
-                    coalesce(Post.ParentId, Post.Id) as TagPostId
+                    coalesce(Post.ParentId, Post.Id) as TagPostId,
+                    site_url || '/questions/' || Post.Id as LiveLink
                 from Post
                 inner join site using(site_id)
                 left outer join Post parent
@@ -687,7 +672,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         return docs
 
-    def render_docs_spreadsheet(self, doc_keys):
+    def render_docs_table(self, doc_keys):
+        """Render a simplified tabular version of the stackexchange posts, including metadata."""
         self.db.execute("savepoint render_docs_spreadsheet")
 
         docs = []

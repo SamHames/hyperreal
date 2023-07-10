@@ -119,7 +119,7 @@ class Cluster:
 
         # Retrieve matching documents if we have a corpus to render them.
         if cherrypy.request.index.corpus is not None:
-            rendered_docs = cherrypy.request.index.render_docs(
+            rendered_docs = cherrypy.request.index.render_docs_html(
                 retrieve_docs, random_sample_size=int(exemplar_docs)
             )
 
@@ -309,7 +309,7 @@ class Index:
             )
 
             if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.render_docs(
+                rendered_docs = cherrypy.request.index.render_docs_html(
                     query, random_sample_size=int(exemplar_docs)
                 )
 

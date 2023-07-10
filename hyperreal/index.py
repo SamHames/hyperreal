@@ -33,6 +33,10 @@ class CorpusMissingError(AttributeError):
     pass
 
 
+class UnsupportedCorpusOperation(AttributeError):
+    pass
+
+
 class IndexingError(AttributeError):
     pass
 
@@ -43,24 +47,32 @@ FeatureIdAndKey = tuple[int, str, Any]
 BitSlice = list[BitMap]
 
 
-def requires_corpus(func):
+def requires_corpus(RequiredCorpus):
     """
-    Mark method as requiring a corpus object.
+    Mark method as requiring specific corpus functionality.
 
     Raises an AttributeError if no corpus object is present on this index.
 
     """
 
-    @wraps(func)
-    def wrapper_func(self, *args, **kwargs):
-        if self.corpus is None:
-            raise CorpusMissingError(
-                "A Corpus must be provided to the index for this functionality."
-            )
+    def corpus_wrapper(func):
+        @wraps(func)
+        def wrapper_func(self, *args, **kwargs):
+            if self.corpus is None:
+                raise CorpusMissingError(
+                    "A Corpus must be provided to the index for this functionality."
+                )
 
-        return func(self, *args, **kwargs)
+            if not isinstance(self.corpus, RequiredCorpus):
+                raise UnsupportedCorpusOperation(
+                    "The required functionality is not available on this corpus."
+                )
 
-    return wrapper_func
+            return func(self, *args, **kwargs)
+
+        return wrapper_func
+
+    return corpus_wrapper
 
 
 def atomic(writes=False):
@@ -308,7 +320,7 @@ class Index:
         else:
             raise KeyError(f"Feature with key '{key}' not found.")
 
-    @requires_corpus
+    @requires_corpus(corpus.BaseCorpus)
     def index(
         self,
         doc_batch_size=1000,
@@ -553,14 +565,36 @@ class Index:
             )[0][0]
             yield doc_key
 
-    @requires_corpus
+    @requires_corpus(corpus.BaseCorpus)
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
         return self.corpus.docs(doc_keys=keys)
 
-    @requires_corpus
-    def render_docs(self, query, random_sample_size=None):
+    def sample_bitmap(self, bitmap, random_sample_size):
+        """
+        Sample up to random_sample_size members from bitmap.
+
+        If there are fewer than the sample size members in the bitmap, return
+        a copy of the bitmap.
+
+        Uses the current state of the indexes random number generator to
+        enable repeatable runs.
+
+        """
+
+        b = len(bitmap)
+        if b > random_sample_size:
+            sampled = BitMap(
+                bitmap[i] for i in self.random.sample(range(b), random_sample_size)
+            )
+            return sampled
+
+        else:
+            return bitmap.copy()
+
+    @requires_corpus(corpus.WebRenderableCorpus)
+    def render_docs_html(self, query, random_sample_size=None):
         """
         Return the rendered representation of the docs matching this query.
 
@@ -568,14 +602,24 @@ class Index:
         """
 
         if random_sample_size is not None:
-            q = len(query)
-            if q > random_sample_size:
-                query = BitMap(
-                    query[i] for i in self.random.sample(range(q), random_sample_size)
-                )
+            query = self.sample_bitmap(query, random_sample_size)
 
         doc_keys = self.convert_query_to_keys(query)
         return self.corpus.render_docs_html(doc_keys)
+
+    @requires_corpus(corpus.TableRenderableCorpus)
+    def render_docs_table(self, query, random_sample_size=None):
+        """
+        Return the rendered representation of the docs matching this query.
+
+        Optionally take a random sample of documents before rendering.
+        """
+
+        if random_sample_size is not None:
+            query = self.sample_bitmap(query, random_sample_size)
+
+        doc_keys = self.convert_query_to_keys(query)
+        return self.corpus.render_docs_table(doc_keys)
 
     def indexed_field_summary(self):
         """

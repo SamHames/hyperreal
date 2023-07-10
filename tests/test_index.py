@@ -189,14 +189,16 @@ def test_querying(example_index_corpora_path, pool):
     assert q
     assert q == len(list(index.convert_query_to_keys(query)))
     assert q == len(list(index.docs(query)))
-    assert q == len(index.render_docs(query))
-    assert 5 == len(index.render_docs(query, random_sample_size=5))
+    assert q == len(index.render_docs_html(query))
+    assert 5 == len(index.render_docs_html(query, random_sample_size=5))
+    assert q == len(index.render_docs_table(query))
+    assert 5 == len(index.render_docs_table(query, random_sample_size=5))
 
     for doc_key, doc in index.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc["text"])
 
     # This is a hacky test, as we're tokenising the representation of the text.
-    for doc_key, rendered_doc in index.render_docs(query, random_sample_size=3):
+    for doc_key, rendered_doc in index.render_docs_html(query, random_sample_size=3):
         assert "the" in hyperreal.utilities.tokens(rendered_doc)
 
     # No matches, return nothing:
