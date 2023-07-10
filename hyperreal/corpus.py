@@ -16,7 +16,7 @@ import gzip
 import html
 import json
 import re
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Sequence, runtime_checkable, Any
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 
@@ -36,6 +36,7 @@ class BaseCorpus(Protocol):
     - Designed to enable small batches of work, and avoid representing entire
       collections in memory/work on collections much larger than memory.
     - Designed to enable downstream concurrent computing on those small batches.
+
     """
 
     CORPUS_TYPE: str
@@ -58,11 +59,12 @@ class BaseCorpus(Protocol):
     @abc.abstractmethod
     def index(self, doc):
         """
-        Returns a mapping of:
+        Returns a mapping of the indexable fields in the document:
 
             {
                 "field1": [value1, value2],
-                "field2": [value]
+                "field2": [value],
+                "field3": {value_a, value_b}
             }
 
         Values need not be deduplicated: the indexer will take care of that
@@ -89,6 +91,27 @@ class BaseCorpus(Protocol):
 
     def __iter__(self):
         return self.docs(doc_keys=None)
+
+
+@runtime_checkable
+class WebAppCorpus(BaseCorpus, Protocol):
+    @abc.abstractmethod
+    def render_docs_html(self, doc_keys):
+        """Render documents into a list of HTML strings."""
+        pass
+
+
+@runtime_checkable
+class SpreadsheetCorpus(BaseCorpus, Protocol):
+    @abc.abstractmethod
+    def render_docs_spreadsheet(self, doc_keys) -> Sequence[tuple[Any, dict[str, str]]]:
+        """
+        Render a series of documents into a form suitable for a spreadsheet.
+
+        This enables spreadsheet export and sampling of documents.
+
+        """
+        pass
 
 
 class SqliteBackedCorpus(BaseCorpus):
@@ -205,6 +228,17 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
     def render_docs_html(self, doc_keys):
         """Return the given documents as HTML."""
         return [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
+
+    def render_docs_spreadsheet(self, doc_keys):
+        """
+        Return the documents for rendering in a spreadsheet or table.
+
+        The only field is "text" in this case.
+
+        """
+        return [
+            (key, {"text": doc["text"]}) for key, doc in self.docs(doc_keys=doc_keys)
+        ]
 
 
 class StackExchangeCorpus(SqliteBackedCorpus):
@@ -530,7 +564,9 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             <details>
                 <summary>Tags:</summary>
                 <ul>
-                    {{ tags }}
+                    {% for tag in tags %}
+                    <li>{{ tag }}
+                    {% endfor %}
                 </ul>
             </details>
 
@@ -557,7 +593,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         """
     )
 
-    def _render_doc_key(self, key):
+    def _get_rendered_doc_fields(self, key):
         base_fields = list(
             self.db.execute(
                 """
@@ -579,6 +615,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     post.ContentLicense,
                     post.PostType,
                     post.Body,
+                    Post.ParentId,
                     coalesce(Post.Title, parent.Title) as QuestionTitle,
                     coalesce(Post.ParentId, Post.Id) as TagPostId
                 from Post
@@ -592,13 +629,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             )
         )[0]
 
-        tags = "\n".join(
-            f"<li>  { r['Tag'] }"
+        tags = [
+            r["Tag"]
             for r in self.db.execute(
                 "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
                 base_fields,
             )
-        )
+        ]
 
         user_comments = list(
             self.db.execute(
@@ -623,18 +660,53 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             )
         )
 
-        return Markup(
-            self.TEMPLATE.render(
-                base_fields=base_fields, tags=tags, user_comments=user_comments
-            )
-        )
+        return base_fields, tags, user_comments
 
     def render_docs_html(self, doc_keys):
+        """Render a HTML version of the stackexchange posts, including metadata."""
         self.db.execute("savepoint render_docs_html")
 
-        docs = [(key, self._render_doc_key(key)) for key in doc_keys]
+        docs = []
+
+        for key in doc_keys:
+            base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
+            docs.append(
+                (
+                    key,
+                    Markup(
+                        self.TEMPLATE.render(
+                            base_fields=base_fields,
+                            tags=tags,
+                            user_comments=user_comments,
+                        )
+                    ),
+                )
+            )
 
         self.db.execute("release render_docs_html")
+
+        return docs
+
+    def render_docs_spreadsheet(self, doc_keys):
+        self.db.execute("savepoint render_docs_spreadsheet")
+
+        docs = []
+
+        for key in doc_keys:
+            base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
+            base_fields["tags"] = ", ".join(tags)
+            base_fields["comments"] = json.dumps(
+                [
+                    {
+                        key: comment[key]
+                        for key in ["DisplayName", "Text", "ContentLicense"]
+                    }
+                    for comment in user_comments
+                ]
+            )
+            docs.append((key, base_fields))
+
+        self.db.execute("release render_docs_spreadsheet")
 
         return docs
 
