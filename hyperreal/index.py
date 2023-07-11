@@ -9,6 +9,7 @@ import atexit
 import collections
 from collections.abc import Sequence, Iterable
 import concurrent.futures as cf
+import csv
 from functools import wraps
 import heapq
 import logging
@@ -667,6 +668,39 @@ class Index:
         }
 
         return cluster_samples, sample_clusters
+
+    @atomic()
+    @requires_corpus(corpus.TableRenderableCorpus)
+    def export_document_sample(self, sample_docs, sample_clusters, output_path):
+        """
+        Export the given sample of documents to CSV.
+
+        It is currently assumed that all documents have the same fields.
+
+        """
+
+        with open(output_path, "w") as out:
+            table_fields = (
+                ["doc_key", "sampled_cluster"]
+                + self.corpus.table_fields
+                + [f"cluster_{cluster_id}" for cluster_id in sorted(sample_clusters)]
+            )
+
+            writer = csv.DictWriter(out, table_fields, extrasaction="ignore")
+
+            writer.writeheader()
+
+            for cluster_id, sample_docs in sample_docs.items():
+                write_docs = self.docs(sample_docs)
+
+                for doc_id, (key, doc) in zip(sample_docs, write_docs):
+                    doc["doc_key"] = key
+                    doc["sampled_cluster"] = cluster_id
+                    for other_cluster_id, cluster_docs in sample_clusters.items():
+                        if doc_id in cluster_docs:
+                            doc[f"cluster_{other_cluster_id}"] = 1
+
+                writer.writerow(doc)
 
     def indexed_field_summary(self):
         """

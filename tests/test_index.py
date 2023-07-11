@@ -176,8 +176,9 @@ def test_model_editing(example_index_path, pool):
     assert len(index.cluster_ids) == 13
 
 
-def test_model_structured_sampling(example_index_path, pool):
-    idx = hyperreal.index.Index(example_index_path, pool=pool)
+def test_model_structured_sampling(example_index_corpora_path, pool, tmp_path):
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
 
     idx.initialise_clusters(8, min_docs=5)
     idx.refine_clusters(iterations=5)
@@ -194,6 +195,12 @@ def test_model_structured_sampling(example_index_path, pool):
 
     assert sum(len(docs) for docs in sample_clusters.values()) >= 16
 
+    # Test writing
+    write_path = tmp_path / "test.csv"
+
+    idx.export_document_sample(cluster_sample, sample_clusters, write_path)
+
+    # Selective cluster exporting
     cluster_sample, sample_clusters = idx.structured_doc_sample(
         docs_per_cluster=2, cluster_ids=idx.cluster_ids[:2]
     )

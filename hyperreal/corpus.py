@@ -95,6 +95,10 @@ class WebRenderableCorpus(BaseCorpus, Protocol):
 
 @runtime_checkable
 class TableRenderableCorpus(BaseCorpus, Protocol):
+    @property
+    def table_fields(self) -> Sequence[str]:
+        pass
+
     @abc.abstractmethod
     def render_docs_table(self, doc_keys) -> Sequence[tuple[Any, dict[str, Any]]]:
         """
@@ -144,6 +148,7 @@ class SqliteBackedCorpus(BaseCorpus):
 
 class PlainTextSqliteCorpus(SqliteBackedCorpus):
     CORPUS_TYPE = "PlainTextSqliteCorpus"
+    table_fields = ["text"]
 
     def __init__(self, db_path, tokeniser=utilities.tokens):
         super().__init__(db_path)
@@ -291,6 +296,20 @@ class StackExchangeHTMLLines(HTMLParser):
 
 class StackExchangeCorpus(SqliteBackedCorpus):
     CORPUS_TYPE = "StackExchangeCorpus"
+    table_fields = [
+        "site_url",
+        "Id",
+        "OwnerUserId",
+        "DisplayName",
+        "ContentLicense",
+        "PostType",
+        "Body",
+        "ParentId",
+        "QuestionTitle",
+        "LiveLink",
+        "tags",
+        "comments",
+    ]
 
     def add_site_data(self, posts_file, comments_file, users_file, site_url):
         """
@@ -664,7 +683,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     post.Body,
                     Post.ParentId,
                     coalesce(Post.Title, parent.Title) as QuestionTitle,
-                    coalesce(Post.ParentId, Post.Id) as TagPostId,
                     site_url || '/questions/' || Post.Id as LiveLink
                 from Post
                 inner join site using(site_id)
