@@ -23,6 +23,7 @@ def test_plaintext_corpus(tmp_path):
     target_corpora_db = tmp_path / "test.db"
     target_index_db = tmp_path / "test_index.db"
     target_graphml = tmp_path / "test.graphml"
+    target_csv = tmp_path / "test.csv"
 
     runner = CliRunner()
 
@@ -85,6 +86,21 @@ def test_plaintext_corpus(tmp_path):
 
     assert result.exit_code == 0
 
+    # Export sample
+
+    result = runner.invoke(
+        cli.plaintext_corpus,
+        [
+            "sample",
+            str(target_corpora_db),
+            str(target_index_db),
+            str(target_csv),
+            "--docs-per-cluster=10",
+        ],
+    )
+
+    assert result.exit_code == 0
+
 
 @pytest.mark.skipif(
     os.environ.get("RUNNING_IN_CI", False),
@@ -129,6 +145,7 @@ def test_twittersphere_corpus(tmp_path):
 def test_sx_corpus(tmp_path):
     target_corpora_db = tmp_path / "sx_corpus.db"
     target_index_db = tmp_path / "sx_corpus_index.db"
+    target_csv = tmp_path / "sx_sample.csv"
 
     runner = CliRunner()
 
@@ -157,3 +174,20 @@ def test_sx_corpus(tmp_path):
     result = runner.invoke(
         cli.model, ["--iterations", "1", "--clusters", "16", str(target_index_db)]
     )
+
+    assert result.exit_code == 0
+
+    # Export sample
+
+    result = runner.invoke(
+        cli.stackexchange_corpus,
+        [
+            "sample",
+            str(target_corpora_db),
+            str(target_index_db),
+            str(target_csv),
+            "--docs-per-cluster=10",
+        ],
+    )
+
+    assert result.exit_code == 0

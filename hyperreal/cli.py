@@ -21,6 +21,38 @@ import hyperreal.server
 logging.basicConfig(level=logging.INFO)
 
 
+# Utility for making exporters that take three arguments, just with a
+# different corpus type.
+def make_csv_exporter(CorpusType):
+    @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
+    @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
+    @click.argument("output_file", type=click.Path(dir_okay=False))
+    @click.option(
+        "--docs-per-cluster",
+        type=click.INT,
+        default=50,
+        help="The maximum number of documents to sample from each cluster. "
+        "If set to 0, all documents in clusters will be returned.",
+    )
+    def export_graph(corpus_db, index_db, output_file, docs_per_cluster):
+        """
+        Export a sample of documents from each cluster in the model.
+
+        """
+        if not hyperreal.index.Index.is_index_db(index_db):
+            raise ValueError(f"{index_db} is not a valid index file.")
+
+        corpus = CorpusType(corpus_db)
+        idx = hyperreal.index.Index(index_db, corpus=corpus)
+
+        cluster_samples, sample_clusters = idx.structured_doc_sample(
+            docs_per_cluster=docs_per_cluster
+        )
+        idx.export_document_sample(cluster_samples, sample_clusters, output_file)
+
+    return export_graph
+
+
 # The main entry command is always hyperreal
 @click.group(name="hyperreal")
 def cli():
@@ -131,6 +163,11 @@ def plaintext_corpus_serve(corpus_db, index_db):
         hyperreal.server.launch_web_server(index_server)
 
 
+plaintext_corpus.command(name="sample")(
+    make_csv_exporter(hyperreal.corpus.PlainTextSqliteCorpus)
+)
+
+
 @cli.group()
 def stackexchange_corpus():
     pass
@@ -233,6 +270,11 @@ def stackexchange_corpus_serve(corpus_db, index_db):
             pool=pool,
         )
         hyperreal.server.launch_web_server(index_server)
+
+
+stackexchange_corpus.command(name="sample")(
+    make_csv_exporter(hyperreal.corpus.StackExchangeCorpus)
+)
 
 
 @cli.group()
@@ -438,6 +480,27 @@ def export_graph(index_db, graph_file, top_k_features, include_field_in_label):
             top_k=top_k_features, include_field_in_label=include_field_in_label
         )
         nx.write_graphml(graph, graph_file)
+
+
+@export.command(name="clusters")
+@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
+@click.argument("cluster_file", type=click.Path(dir_okay=False))
+def export_clusters(index_db, cluster_file):
+    """
+    Export all cluster features in the model to the given csv file.
+    """
+    if not hyperreal.index.Index.is_index_db(index_db):
+        raise ValueError(f"{index_db} is not a valid index file.")
+
+    idx = hyperreal.index.Index(index_db)
+
+    with open(cluster_file, "w") as output:
+        writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
+        writer.writerow(("cluster_id", "feature_id", "field", "value", "docs_count"))
+
+        for cluster_id, _, cluster_features in all_features:
+            for row in cluster_features:
+                writer.writerow([cluster_id, *row])
 
 
 @cli.command()

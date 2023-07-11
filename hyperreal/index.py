@@ -677,6 +677,10 @@ class Index:
 
         It is currently assumed that all documents have the same fields.
 
+        This method uses the fields exposed in the table_fields property of
+        the corpus to determine what to export - if a document has additional
+        fields these are silently dropped.
+
         """
 
         with open(output_path, "w") as out:
@@ -686,7 +690,13 @@ class Index:
                 + [f"cluster_{cluster_id}" for cluster_id in sorted(sample_clusters)]
             )
 
-            writer = csv.DictWriter(out, table_fields, extrasaction="ignore")
+            writer = csv.DictWriter(
+                out,
+                table_fields,
+                extrasaction="ignore",
+                dialect="excel",
+                quoting=csv.QUOTE_ALL,
+            )
 
             writer.writeheader()
 
