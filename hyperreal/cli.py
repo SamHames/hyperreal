@@ -485,7 +485,14 @@ def export_graph(index_db, graph_file, top_k_features, include_field_in_label):
 @export.command(name="clusters")
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("cluster_file", type=click.Path(dir_okay=False))
-def export_clusters(index_db, cluster_file):
+@click.option(
+    "--top-k-features",
+    type=click.INT,
+    default=10,
+    help="The number of top features to include from each cluster."
+    "Setting this to 0 will export all features in each cluster.",
+)
+def export_clusters(index_db, cluster_file, top_k_features):
     """
     Export all cluster features in the model to the given csv file.
     """
@@ -498,7 +505,9 @@ def export_clusters(index_db, cluster_file):
         writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
         writer.writerow(("cluster_id", "feature_id", "field", "value", "docs_count"))
 
-        for cluster_id, _, cluster_features in all_features:
+        top_k = top_k_features or 2**62
+        features = idx.top_cluster_features(top_k=top_k)
+        for cluster_id, _, cluster_features in features:
             for row in cluster_features:
                 writer.writerow([cluster_id, *row])
 

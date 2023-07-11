@@ -86,6 +86,15 @@ def test_plaintext_corpus(tmp_path):
 
     assert result.exit_code == 0
 
+    # Clusters
+
+    result = runner.invoke(
+        cli.export,
+        ["clusters", str(target_index_db), str(target_csv)],
+    )
+
+    assert result.exit_code == 0
+
     # Export sample
 
     result = runner.invoke(
