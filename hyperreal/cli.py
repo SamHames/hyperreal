@@ -501,7 +501,7 @@ def export_clusters(index_db, cluster_file, top_k_features):
 
     idx = hyperreal.index.Index(index_db)
 
-    with open(cluster_file, "w") as output:
+    with open(cluster_file, "w", encoding="utf-8") as output:
         writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
         writer.writerow(("cluster_id", "feature_id", "field", "value", "docs_count"))
 

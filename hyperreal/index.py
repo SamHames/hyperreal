@@ -683,7 +683,7 @@ class Index:
 
         """
 
-        with open(output_path, "w") as out:
+        with open(output_path, "w", encoding="utf-8") as out:
             table_fields = (
                 ["doc_key", "sampled_cluster"]
                 + self.corpus.table_fields
