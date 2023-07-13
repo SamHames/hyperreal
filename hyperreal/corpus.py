@@ -640,7 +640,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 <summary>Comments:</summary>
                 <ul>
                     {% for comment in user_comments %}
-                        <li>{{ comment["Text"] }}
+                        <li>{{ comment["Text"] | e}}
                             <small>
                                 Copyright {{ comment["ContentLicense"]}} by
                                 {% if comment["UserId"] %}
