@@ -32,6 +32,10 @@ import hyperreal.server
 
 
 class HansardCorpus(SqliteBackedCorpus):
+    CORPUS_TYPE = "Australian Federal Hansard"
+
+    table_fields = ["date", "house", "debate_title", "subdebate_title", "speech"]
+
     def __init__(self, db_path):
         """
         A relational model of the proceedings of the Australian Federal
@@ -44,12 +48,6 @@ class HansardCorpus(SqliteBackedCorpus):
 
         """
         super().__init__(db_path)
-
-    def process_historical_transcript(self, xmldata):
-        pass
-
-    def process_current_transcript(self, xmldata):
-        pass
 
     def _insert_rows(self, rows):
         self.db.execute(
@@ -98,14 +96,16 @@ class HansardCorpus(SqliteBackedCorpus):
             self.db.execute("release docs")
 
     def index(self, doc):
-        root = ElementTree.fromstring(doc["speech"])
+        try:
+            root = ElementTree.fromstring(doc["speech"])
+        except ElementTree.ParseError:
+            # Special case 1 - stray closing >
+            root = ElementTree.fromstring(doc["speech"].replace(b"&gt;\n", b""))
 
         speech_tokens = []
-
-        for tag in ["para", "quote", "list"]:
-            for element in root.findall(f".//{tag}"):
-                speech_tokens.extend(tokens(element.text or ""))
-                speech_tokens.append(None)
+        for element in root.iter():
+            speech_tokens.extend(tokens(element.text or ""))
+            speech_tokens.append(None)
 
         return {"speech": speech_tokens}
 
@@ -116,11 +116,15 @@ class HansardCorpus(SqliteBackedCorpus):
         for key, doc in self.docs(doc_keys=doc_keys):
             tree = ElementTree.ElementTree(ElementTree.fromstring(doc["speech"]))
 
-            paras = [
-                f"<p>{node.text}</p>"
-                for node in tree.iter()
-                if node.tag in {"para", "quote", "list"}
-            ]
+            # TODO: render these speeches better...
+            if doc["date"] < "2006-02-07":
+                paras = [
+                    f"<p>{node.text}</p>"
+                    for node in tree.iter()
+                    if node.tag in {"para", "quote", "list"}
+                ]
+            else:
+                paras = [doc["speech"].decode("utf8")]
 
             summary = ", ".join(
                 doc[item]
@@ -136,16 +140,21 @@ class HansardCorpus(SqliteBackedCorpus):
 
         return docs
 
+    def render_docs_table(self, doc_keys):
+        """Return the given documents as HTML."""
+
+        return list(self.docs(doc_keys=doc_keys))
+
     def keys(self):
         """The keys are the rowids on the speech table."""
         return (r["rowid"] for r in self.db.execute("select rowid from speech"))
 
-    def replace_speeches(self, *zipfiles):
+    def replace_speeches(self, historic_zip, current_zip):
         """
         Replace the existing corpus with newly processed files.
 
-        Pass a sequence of zipfiles, and all xml files in each will
-        be processed.
+        Pass paths to the zipped historic and current files as downloaded
+        with the download_data.py script.
 
         """
         self.db.execute("pragma journal_mode=WAL")
@@ -220,8 +229,11 @@ class HansardCorpus(SqliteBackedCorpus):
 
             self.db.execute("drop table if exists interjection")
 
-            for filepath in zipfiles:
-                with zipfile.ZipFile(filepath, "r") as zip_data:
+            files = (historic_zip, current_zip)
+            functions = (process_xml_historic, process_xml_current)
+
+            for file_path, process_function in zip(files, functions):
+                with zipfile.ZipFile(file_path, "r") as zip_data:
                     to_process = [
                         fileinfo
                         for fileinfo in zip_data.infolist()
@@ -233,7 +245,7 @@ class HansardCorpus(SqliteBackedCorpus):
 
                     for progress, fileinfo in enumerate(to_process):
                         raw_data = zip_data.open(fileinfo).read()
-                        rows = process_xml_historic(raw_data, fileinfo.filename)
+                        rows = process_function(raw_data, fileinfo.filename)
 
                         if rows:
                             try:
@@ -243,88 +255,14 @@ class HansardCorpus(SqliteBackedCorpus):
                                 traceback.print_exc()
 
                         print(f"{progress + 1} / {n_process}", end="\r", flush=True)
+                print(f"{file_path} complete.")
 
         except Exception:
-            # self.db.execute("rollback to add_texts")
+            self.db.execute("rollback to add_texts")
             raise
 
         finally:
             self.db.execute("release add_texts")
-
-
-def count_words(para):
-    """
-    Count the number of words in an element.
-    """
-    words = 0
-    for string in para.stripped_strings:
-        words += len(string.split())
-    return words
-
-
-def get_paras(section):
-    """
-    Find all the para type containers in an element and count the total number of words.
-    """
-    words = 0
-    for para in section.find_all(["para", "quote", "list"], recursive=False):
-        words += count_words(para)
-    return words
-
-
-def get_words_in_speech(start, speech):
-    """
-    Get the top-level containers in a speech and find the total number of words across them all.
-    """
-    words = 0
-    words += get_paras(start)
-    words += get_paras(speech)
-    for cont in speech.find_all("continue", recursive=False):
-        cont_start = cont.find("talk.start", recursive=False)
-        words += get_paras(cont_start)
-        words += get_paras(cont)
-    return words
-
-
-def get_interjections(speech):
-    """
-    Get details of any interjections within a speech.
-    """
-    speeches = []
-    for index, intj in enumerate(speech.find_all("interjection", recursive=False)):
-        start = intj.find("talk.start", recursive=False)
-        speaker = start.find("talker")
-        name = speaker.find("name", role="metadata").string
-        id = speaker.find("name.id").string
-        words = get_words_in_speech(start, intj)
-        speeches.append(
-            {
-                "interjection_idx": index,
-                "speaker": name,
-                "id": id,
-                "type": intj.name,
-                "words": words,
-            }
-        )
-    return speeches
-
-
-def get_subdebates(debate):
-    """
-    Get details of any subdebates within a debate.
-    """
-    speeches = []
-    for index, sub in enumerate(debate.find_all("subdebate.1", recursive=False)):
-        subdebate_info = {
-            "subdebate_title": sub.subdebateinfo.title.string,
-            "subdebate_idx": index,
-        }
-        new_speeches = get_speeches(sub)
-        # Add the subdebate info to the speech
-        for sp in new_speeches:
-            sp.update(subdebate_info)
-        speeches += new_speeches
-    return speeches
 
 
 Session = namedtuple(
@@ -492,9 +430,9 @@ def process_xml_historic(xml_data, source_file):
             # Note that questions and answers aren't explicitly delimited until
             # later in the corpus.
             speeches = (
-                debate.findall("speech")
-                + debate.findall("question")
-                + debate.findall("answer")
+                subdebate.findall("speech")
+                + subdebate.findall("question")
+                + subdebate.findall("answer")
             )
 
             for speech_seq, speech_data in enumerate(speeches):
@@ -512,18 +450,177 @@ def process_xml_historic(xml_data, source_file):
     return rows
 
 
+def process_xml_current(xml_data, source_file):
+    """
+    Process an XML transcript from the current data.
+
+    This returns a dictionary mapping a table name to rows for that table.
+
+    Note that currently the segments returned are just raw XML blobs,
+    no additional filtering.
+
+    There is a lot of additional metadata in the current files that isn't
+    present in the historical data. TODO: work out whether it makes sense to
+    base the schema on the current and fill in as much as possible from the
+    historical instead of current?
+
+    Modelling notes:
+
+    For consistency with the historical data that wraps up longer segments
+    into a single speech, <speech> segments are merged together with their
+    interjections. So a sequence like the following is merged into a single
+    speech element:
+
+        <speech type="speech">Content</speech>
+        <speech type="interjection">Content</speech>
+        <speech type="continuing">Content</speech>
+
+    Historical data uses debate/subdebate - for the modern data it's more
+    major heading/minor heading, and these are flat items in the stream
+    rather than headers for containers.
+
+    """
+
+    rows = defaultdict(list)
+
+    if "represent" in source_file:
+        house = "REPS"
+    else:
+        house = "SENATE"
+
+    date = source_file.split("/")[1].split(".")[0]
+
+    session = Session(
+        date,
+        # TODO: Map dates back to parliament numbers as it is no longer in
+        # this file.
+        None,
+        house,
+        # The session and other numbers can probably be derived from sequence
+        # or somewhere else?
+        None,
+        None,
+        source_file,
+    )
+    rows["session"] = session
+
+    root = ElementTree.fromstring(xml_data)
+
+    debate_seq = 0
+    subdebate_seq = 0
+    speech_seq = 0
+    current_speeches = []
+
+    def process_speech_tags(current_speeches):
+        """
+        For consistency with the historical data and to provide complete
+        context, we're going to glue together speech tags that represent a
+        contiguous unit including interjections and continuations. Note that
+        interjections by individuals appear to be labelled as interjections,
+        but general interjections or affirmations(hear, hear! or "Members of
+        the opposition interjecting") are labelled as speech elements
+        followed by a continuation. Speech elements that are followed by a
+        continuation are considered like interjections as part of the same
+        contiguous speech by a speaker. TODO: investigate the continuation
+        attribute further and see if that can be used to disambiguate.
+
+        """
+        talktypes = [speech_elem.attrib["talktype"] for speech_elem in current_speeches]
+        # Add sentinel so we can always check the next element.
+        talktypes.append(None)
+        contiguous_starts = [
+            i
+            for i, talktype in enumerate(talktypes)
+            if talktype == "speech" and talktypes[i + 1] != "continuation"
+        ]
+
+        # Make sure that we include the first segment if it does not start
+        # with a talktype of speech:
+        if not contiguous_starts or contiguous_starts[0] != 0:
+            contiguous_starts.insert(0, 0)
+
+        # Handle the final segment
+        contiguous_starts.append(len(talktypes) + 1)
+        contiguous_speeches = []
+
+        # Now generate the actuals speeches
+        for start, end in zip(contiguous_starts, contiguous_starts[1:]):
+            contiguous_speech = ElementTree.Element("div")
+            for speech_elem in current_speeches[start:end]:
+                contiguous_speech.append(speech_elem)
+
+            contiguous_speeches.append(ElementTree.tostring(contiguous_speech))
+
+        return contiguous_speeches
+
+    for elem in root:
+        # Process the batch of speeches from the last debate/subdebate
+        # sequence before we reset the debate/subdebate
+        if current_speeches and elem.tag in ("major-heading", "minor-heading"):
+            for speech in process_speech_tags(current_speeches):
+                speech_info = Speech(
+                    session.date,
+                    session.house,
+                    debate_seq,
+                    subdebate_seq,
+                    speech_seq,
+                    None,
+                    speech,
+                )
+
+                speech_seq += 1
+                rows["speech"].append(speech_info)
+
+            current_speeches = []
+
+        if elem.tag == "major-heading":
+            debate_info = Debate(
+                session.date, session.house, debate_seq, elem.text.strip(), None
+            )
+            rows["debate"].append(debate_info)
+
+            debate_seq += 1
+
+            # This is a sentinel to test the assumption that every major
+            # heading also has a following minor heading - this lets
+            # us simplify the processing if it remains true.
+            subdebate_info = None
+
+        elif elem.tag == "minor-heading":
+            subdebate_info = SubDebate(
+                session.date,
+                session.house,
+                debate_seq,
+                subdebate_seq,
+                elem.text.strip(),
+                None,
+            )
+            rows["subdebate"].append(subdebate_info)
+
+            subdebate_seq += 1
+
+        elif elem.tag == "speech":
+            current_speeches.append(elem)
+
+    # Make sure to process the last batch in the file!
+    return rows
+
+
 if __name__ == "__main__":
     __spec__ = None
 
     corpus = HansardCorpus("test.db")
 
-    # corpus.replace_speeches(os.path.join("data", "hansard_1901-1980_1998-2005.zip"))
-
-    idx = Index("test_index.db", corpus=corpus)
-    # idx.index()
+    corpus.replace_speeches(
+        os.path.join("data", "hansard_1901-1980_1998-2005.zip"),
+        os.path.join("data", "hansard_2005-present.zip"),
+    )
 
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+        idx = Index("test_index.db", corpus=corpus, pool=pool)
+        idx.index()
+
         index_server = hyperreal.server.SingleIndexServer(
             "test_index.db",
             corpus_class=HansardCorpus,
