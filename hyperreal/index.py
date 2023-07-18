@@ -456,6 +456,10 @@ class Index:
             self.db.execute("attach ? as tempindex", [temp_index])
             detach = True
 
+            self.db.execute(
+                "create index tempindex.field_value on inverted_index_segment(field, value)"
+            )
+
             query = """
                 replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
                     select
