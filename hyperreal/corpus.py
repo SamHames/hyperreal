@@ -559,7 +559,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                                 ),
                                 '<Deleted User>'
                             ) as DisplayName,
-                            CreationDate
+                            CreationDate,
+                            PostType
                         from Post
                         inner join Site using(site_id)
                         where Post.doc_id = ?
@@ -803,6 +804,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 t for c in doc["UserComments"] for t in utilities.tokens(c["Text"])
             ],
             "Site": set([doc["site_url"]]),
+            "PostType": set([doc["PostType"]]),
         }
 
         created_at = isoparse(doc["CreationDate"])
