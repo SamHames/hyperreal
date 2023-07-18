@@ -971,10 +971,23 @@ class Index:
             )
         ]
 
-        future = self.pool.submit(
-            _calculate_query_cluster_cooccurrence, self.db_path, 0, query, cluster_ids
-        )
-        _, weights = future.result()
+        jobs = self.pool._max_workers * 2
+        futures = [
+            self.pool.submit(
+                _calculate_query_cluster_cooccurrence,
+                self.db_path,
+                0,
+                query,
+                cluster_ids[i::jobs],
+            )
+            for i in range(jobs)
+        ]
+
+        weights = []
+
+        for f in cf.as_completed(futures):
+            weights.extend(f.result()[1])
+
         process_order = sorted(weights, key=lambda x: x[1], reverse=True)
 
         if scoring == "jaccard":
