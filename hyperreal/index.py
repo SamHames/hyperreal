@@ -444,6 +444,29 @@ class Index:
                 [BitMap()],
             )
 
+            # Also reset the positions table.
+            self.db.execute("drop table if exists inverted_position_index")
+            self.db.execute(
+                """
+                create table main.inverted_position_index (
+                    feature_id integer primary key references inverted_index on delete cascade,
+                    position_count,
+                    positions roaring_bitmap
+                )
+                """
+            )
+            self.db.execute(
+                """
+                create table if not exists main.position_doc (
+                    field,
+                    position_end,
+                    doc_id integer references doc_key(doc_id) on delete cascade,
+                    primary key (field, position_end)
+                ) without rowid
+                """
+            )
+            self.db.execute("delete from main.position_doc")
+
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
                 f.result()
@@ -483,71 +506,90 @@ class Index:
                 """
             )
 
-            # Now process the position buckets in order - since the
-            # feature_ids are maintained in a separate table this can just be
-            # a drop and reload
-            self.db.execute("drop table if exists inverted_position_index")
             self.db.execute(
                 """
-                create table main.inverted_position_index (
-                    feature_id integer primary key references inverted_index on delete cascade,
-                    buckets_count,
-                    bucket_ids roaring_bitmap
-                )
-                """
-            )
-
-            self.db.execute(
-                """
-                create table tempindex.bucket_shift (
+                create table tempindex.position_shift (
                     field,
                     first_doc_id,
-                    bucket_shift,
+                    position_shift,
                     primary key (field, first_doc_id)
                 )
                 """
             )
 
-            ordered_buckets = self.db.execute(
+            ordered_positions = self.db.execute(
                 """
                 select
                     field,
                     first_doc_id,
-                    last_bucket
-                from batch_bucket
+                    last_doc_position
+                from batch_position
                 order by field, first_doc_id
                 """
             )
 
-            bucket_offsets = collections.defaultdict(list)
+            position_offsets = collections.defaultdict(list)
 
-            for field, first_doc_id, last_bucket in ordered_buckets:
-                bucket_offsets[field].append((first_doc_id, last_bucket))
+            for field, first_doc_id, last_position in ordered_positions:
+                position_offsets[field].append((first_doc_id, last_position))
 
-            for field, buckets_info in bucket_offsets.items():
-                next_bucket_shift = 0
+            for field, positions_info in position_offsets.items():
+                next_position_shift = 0
 
-                for doc_id, last_bucket in buckets_info:
+                for doc_id, last_position in positions_info:
                     self.db.execute(
-                        "insert into bucket_shift values(?, ?, ?)",
-                        (field, doc_id, next_bucket_shift),
+                        "insert into position_shift values(?, ?, ?)",
+                        (field, doc_id, next_position_shift),
                     )
-                    next_bucket_shift += last_bucket
+                    next_position_shift += last_position
+
+            # Map flat positions to document ids
+            position_doc_map = self.db.execute(
+                """
+                select
+                    field,
+                    first_doc_id,
+                    last_doc_id,
+                    doc_position_ends,
+                    position_shift
+                from batch_position
+                inner join position_shift using(field, first_doc_id)
+                order by field, first_doc_id
+                """
+            )
+
+            for (
+                field,
+                first_doc_id,
+                last_doc_id,
+                doc_position_ends,
+                shift,
+            ) in position_doc_map:
+                self.db.executemany(
+                    "insert into position_doc values(?, ?, ?)",
+                    (
+                        (field, doc_id, end_position)
+                        for doc_id, end_position in zip(
+                            range(first_doc_id, last_doc_id + 1),
+                            doc_position_ends.shift(shift),
+                        )
+                    ),
+                )
 
             # Actually populate the new values, shifting positions as we go
             self.db.execute(
                 """
-                insert into inverted_position_index(feature_id, buckets_count, bucket_ids)
+                insert into inverted_position_index(feature_id, position_count, positions)
                     select
                         (
                             select feature_id
                             from inverted_index ii
                             where (ii.field, ii.value) = (ipis.field, ipis.value)
                         ),
-                        sum(bucket_count) as bucket_count,
-                        roaring_shift_union(bucket_ids, bucket_shift) as bucket_ids
+                        sum(position_count) as position_count,
+                        roaring_shift_union(positions, position_shift) as positions
                     from inverted_position_index_segment ipis
-                    inner join tempindex.bucket_shift using(field, first_doc_id)
+                    inner join tempindex.position_shift using(field, first_doc_id)
                     group by field, value
                 """
             )
@@ -1854,18 +1896,36 @@ class Index:
 def _index_docs(
     corpus, doc_ids, doc_keys, temp_db_path, position_window_size, write_lock
 ):
-    """Index all of the given docs into temp_db_path."""
+    """
+    Index all of the given docs into temp_db_path.
+
+    position_window_size has three modes:
+
+    0 - disabled, no position information will be recorded.
+    > 0 - approximate position windows of the given half width will be created.
+    < 0 - an exclusive window flat position index of size abs(position_window_size)
+        will be created. A value of -1 is an exact flat position index as described
+        in https://dl.acm.org/doi/abs/10.1145/2063576.2063875
+
+    """
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
+        # Mapping of {field: {value: (BitMap(), BitMap())}}
+        # One bitmap for document occurrence, the other other for recording
+        # positional information.
         batch = collections.defaultdict(
             lambda: collections.defaultdict(lambda: (BitMap(), BitMap()))
         )
-        # Mapping of fields -> doc_ids -> bucket locations for the positions index
-        field_position_bucket = collections.defaultdict(lambda: [0])
+
+        # Mapping of fields -> position ends for each document.
+        field_doc_position = collections.defaultdict(lambda: [0])
 
         docs = corpus.docs(doc_keys=doc_keys)
+
+        approx_positions = position_window_size > 0
+        position_window_size = abs(position_window_size)
 
         for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
@@ -1878,29 +1938,49 @@ def _index_docs(
                     and isinstance(values, collections.abc.Sequence)
                     and len(values) > 1
                 ):
-                    current_bucket = field_position_bucket[field][-1]
-                    used_bucket = False
+                    current_position = field_doc_position[field][-1]
+                    position_size = 0
+                    used_position = False
 
-                    for position, value in enumerate(values):
+                    for value in values:
                         if value is None:
-                            # Note - need to handle strings of sentinel values
-                            if used_bucket:
-                                current_bucket += 2
-                            used_bucket = False
+                            # Note - needed to handle strings of sentinel
+                            # values We add two because the approximate
+                            # position assigns every value to two positions to
+                            # handle edge effects.
+                            if used_position and approx_positions:
+                                current_position += 2
+                                position_size = 0
+
+                            # Exact position recording for negative position
+                            # windows.
+                            elif used_position:
+                                current_position += 1
+                                position_size = 0
+
+                            used_position = False
                             continue
 
-                        if not ((position + 1) % position_window_size):
-                            current_bucket += 1
+                        batch[field][value][1].add(current_position)
 
-                        batch[field][value][1].add(current_bucket)
-                        batch[field][value][1].add(current_bucket + 1)
-                        used_bucket = True
+                        if approx_positions:
+                            batch[field][value][1].add(current_position + 1)
+
+                        used_position = True
+
+                        position_size += 1
+
+                        if not (position_size % position_window_size):
+                            current_position += 1
+                            position_size = 0
 
                     else:
-                        if used_bucket:
-                            field_position_bucket[field].append(current_bucket + 2)
+                        if used_position and approx_positions:
+                            field_doc_position[field].append(current_position + 2)
+                        elif used_position:
+                            field_doc_position[field].append(current_position + 1)
                         else:
-                            field_position_bucket[field].append(current_bucket)
+                            field_doc_position[field].append(current_position)
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -1927,8 +2007,8 @@ def _index_docs(
                 CREATE table if not exists inverted_position_index_segment(
                     field text,
                     value,
-                    bucket_count,
-                    bucket_ids roaring_bitmap,
+                    position_count,
+                    positions roaring_bitmap,
                     first_doc_id
                 )
                 """
@@ -1936,28 +2016,28 @@ def _index_docs(
 
             local_db.execute(
                 """
-                CREATE table if not exists batch_bucket(
+                CREATE table if not exists batch_position(
                     field,
                     first_doc_id,
                     last_doc_id,
-                    bucket_ends roaring_bitmap,
-                    last_bucket,
+                    doc_position_ends roaring_bitmap,
+                    last_doc_position,
                     primary key (field, first_doc_id)
                 )
                 """
             )
 
             local_db.executemany(
-                "insert into batch_bucket values(?, ?, ?, ?, ?)",
+                "insert into batch_position values(?, ?, ?, ?, ?)",
                 (
                     (
                         field,
                         doc_ids[0],
                         doc_ids[-1],
-                        BitMap(bucket_starts[1:]),
-                        bucket_starts[-1],
+                        BitMap(position_starts[1:]),
+                        position_starts[-1],
                     )
-                    for field, bucket_starts in field_position_bucket.items()
+                    for field, position_starts in field_doc_position.items()
                 ),
             )
 

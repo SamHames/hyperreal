@@ -84,11 +84,16 @@ def make_two_file_indexer(CorpusType):
         click.echo(f"Indexing {corpus_db} into {index_db}.")
 
         doc_corpus = CorpusType(corpus_db)
-        doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
 
-        doc_index.index(
-            doc_batch_size=doc_batch_size, position_window_size=position_window_size
-        )
+        mp_context = mp.get_context("spawn")
+        with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+            doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus, pool=pool)
+
+            click.echo(f"{position_window_size=}")
+
+            doc_index.index(
+                doc_batch_size=doc_batch_size, position_window_size=position_window_size
+            )
 
     return corpus_indexer
 

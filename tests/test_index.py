@@ -23,7 +23,7 @@ import hyperreal
 @pytest.fixture(scope="module")
 def pool():
     context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=context) as pool:
+    with cf.ProcessPoolExecutor(2, mp_context=context) as pool:
         yield pool
 
 
@@ -51,12 +51,16 @@ def check_alice():
         docs = (line[0] for line in csv.reader(f) if line and line[0].strip())
         target_nnz = 0
         target_docs = 0
+        target_positions = 0
         for d in docs:
             target_docs += 1
             # Note, exclude the None sentinel at the end.
             target_nnz += len(set(hyperreal.utilities.tokens(d)[:-1]))
+            target_positions += sum(
+                1 for v in hyperreal.utilities.tokens(d) if v is not None
+            )
 
-    return target_docs, target_nnz
+    return target_docs, target_nnz, target_positions
 
 
 corpora_test_cases = [
@@ -80,7 +84,7 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     i.index(doc_batch_size=10)
 
     # Compare against the actual test data.
-    target_docs, target_nnz = check_stats()
+    target_docs, target_nnz, target_positions = check_stats()
 
     nnz = list(i.db.execute("select sum(docs_count) from inverted_index"))[0][0]
     total_docs = list(i.db.execute("select count(*) from doc_key"))[0][0]
@@ -101,6 +105,12 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
         "select feature_id, field, value from inverted_index"
     ):
         assert (field, value) == features_field_values[feature_id]
+
+    i.index(doc_batch_size=100, position_window_size=-1)
+    positions = list(
+        i.db.execute("select sum(position_count) from inverted_position_index")
+    )[0][0]
+    assert positions == target_positions
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
@@ -466,3 +476,17 @@ def test_graph_creation(example_index_path, pool):
     graph = idx.create_cluster_cooccurrence_graph(top_k=5)
 
     assert len(graph.nodes) == 32
+
+
+def test_indexing_utility(example_index_corpora_path, tmp_path, pool):
+    """Test the indexing utility function."""
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+
+    temp_index = tmp_path / "tempindex.db"
+
+    doc_keys = list(range(1, 100))
+    doc_ids = doc_keys
+
+    hyperreal.index._index_docs(
+        corpus, doc_keys, doc_ids, str(temp_index), -1, mp.Lock()
+    )
