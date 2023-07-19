@@ -460,7 +460,14 @@ class Index:
                 "create index tempindex.field_value on inverted_index_segment(field, value)"
             )
 
-            query = """
+            self.db.execute(
+                "create index tempindex.field_value_doc_ids on "
+                "inverted_position_index_segment(field, value, first_doc_id)"
+            )
+
+            # Actually populate the new values
+            self.db.execute(
+                """
                 replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
                     select
                         (
@@ -475,9 +482,77 @@ class Index:
                     from inverted_index_segment iis
                     group by field, value
                 """
+            )
 
-            # Actually populate the new values
-            self.db.execute(query)
+            # Now process the position buckets in order - since the
+            # feature_ids are maintained in a separate table this can just be
+            # a drop and reload
+
+            self.db.execute("drop table if exists inverted_position_index")
+            self.db.execute(
+                """
+                create table main.inverted_position_index (
+                    feature_id integer primary key references inverted_index on delete cascade,
+                    buckets_count,
+                    bucket_ids roaring_bitmap
+                )
+                """
+            )
+
+            self.db.execute(
+                """
+                create table tempindex.bucket_shift (
+                    field,
+                    first_doc_id,
+                    bucket_shift,
+                    primary key (field, first_doc_id)
+                )
+                """
+            )
+
+            ordered_buckets = self.db.execute(
+                """
+                select
+                    field,
+                    first_doc_id,
+                    last_bucket
+                from batch_bucket
+                order by field, first_doc_id
+                """
+            )
+
+            bucket_offsets = collections.defaultdict(list)
+
+            for field, first_doc_id, last_bucket in ordered_buckets:
+                bucket_offsets[field].append((first_doc_id, last_bucket))
+
+            for field, buckets_info in bucket_offsets.items():
+                next_bucket_shift = 0
+
+                for doc_id, last_bucket in buckets_info:
+                    self.db.execute(
+                        "insert into bucket_shift values(?, ?, ?)",
+                        (field, doc_id, next_bucket_shift),
+                    )
+                    next_bucket_shift += last_bucket
+
+            # Actually populate the new values, shifting positions as we go
+            self.db.execute(
+                """
+                insert into inverted_position_index(feature_id, buckets_count, bucket_ids)
+                    select
+                        (
+                            select feature_id
+                            from inverted_index ii
+                            where (ii.field, ii.value) = (ipis.field, ipis.value)
+                        ),
+                        sum(bucket_count) as bucket_count,
+                        roaring_shift_union(bucket_ids, bucket_shift) as bucket_ids
+                    from inverted_position_index_segment ipis
+                    inner join tempindex.bucket_shift using(field, first_doc_id)
+                    group by field, value
+                """
+            )
 
             # Update docs_counts in the clusters
             self.db.execute(
@@ -1811,8 +1886,12 @@ def _index_docs(
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
-        # This is {field: {value: doc_ids, value2: doc_ids}}
-        batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
+        batch = collections.defaultdict(
+            lambda: collections.defaultdict(lambda: (BitMap(), BitMap()))
+        )
+        # Mapping of fields -> doc_ids -> bucket locations for the positions index
+        field_position_bucket = collections.defaultdict(lambda: [0])
+
         # The structure is (distance, field, value_a, value_b: count)
         skipgram_counts = [
             collections.defaultdict(
@@ -1837,10 +1916,36 @@ def _index_docs(
                     for item_a, item_b, distance in bigrams:
                         skipgram_counts[distance - 1][field][item_a][item_b] += 1
 
+                if isinstance(values, collections.abc.Sequence) and len(values) > 1:
+                    current_bucket = field_position_bucket[field][-1]
+                    used_bucket = False
+
+                    for position, value in enumerate(values):
+                        if value is None:
+                            # Note - need to handle strings of sentinel values
+                            if used_bucket:
+                                current_bucket += 2
+                            used_bucket = False
+                            continue
+
+                        if not ((position + 1) % 32):
+                            current_bucket += 1
+
+                        batch[field][value][1].add(current_bucket)
+                        batch[field][value][1].add(current_bucket + 1)
+                        used_bucket = True
+
+                    else:
+                        if used_bucket:
+                            field_position_bucket[field].append(current_bucket + 2)
+                        else:
+                            field_position_bucket[field].append(current_bucket)
+
                 set_values = set(values)
+                set_values.discard(None)
 
                 for value in set_values:
-                    batch[field][value].add(doc_id)
+                    batch[field][value][0].add(doc_id)
 
         with write_lock:
             local_db.execute("pragma synchronous=0")
@@ -1856,6 +1961,45 @@ def _index_docs(
                 """
             )
 
+            local_db.execute(
+                """
+                CREATE table if not exists inverted_position_index_segment(
+                    field text,
+                    value,
+                    bucket_count,
+                    bucket_ids roaring_bitmap,
+                    first_doc_id
+                )
+                """
+            )
+
+            local_db.execute(
+                """
+                CREATE table if not exists batch_bucket(
+                    field,
+                    first_doc_id,
+                    last_doc_id,
+                    bucket_ends roaring_bitmap,
+                    last_bucket,
+                    primary key (field, first_doc_id)
+                )
+                """
+            )
+
+            local_db.executemany(
+                "insert into batch_bucket values(?, ?, ?, ?, ?)",
+                (
+                    (
+                        field,
+                        doc_ids[0],
+                        doc_ids[-1],
+                        BitMap(bucket_starts[1:]),
+                        bucket_starts[-1],
+                    )
+                    for field, bucket_starts in field_position_bucket.items()
+                ),
+            )
+
             # Ensure we do all the inserts in sorted order as far as possible
             field_order = sorted(batch.keys())
 
@@ -1866,8 +2010,23 @@ def _index_docs(
                 local_db.executemany(
                     "insert into inverted_index_segment values(?, ?, ?, ?)",
                     (
-                        (field, value, len(values[value]), values[value])
+                        (field, value, len(values[value][0]), values[value][0])
                         for value in value_order
+                    ),
+                )
+
+                local_db.executemany(
+                    "insert into inverted_position_index_segment values(?, ?, ?, ?, ?)",
+                    (
+                        (
+                            field,
+                            value,
+                            len(values[value][1]),
+                            values[value][1],
+                            doc_ids[0],
+                        )
+                        for value in value_order
+                        if values[value][1]
                     ),
                 )
 
