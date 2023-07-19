@@ -53,6 +53,46 @@ def make_csv_exporter(CorpusType):
     return export_graph
 
 
+def make_two_file_indexer(CorpusType):
+    @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
+    @click.argument("index_db", type=click.Path(dir_okay=False))
+    @click.option(
+        "--doc-batch-size",
+        type=int,
+        default=DEFAULT_DOC_BATCH_SIZE,
+        help="The size of individual batches of documents sent for indexing. "
+        "Larger sizes will require more ram, but might be more efficient for "
+        "large collections.",
+    )
+    @click.option(
+        "--position-window-size",
+        default=0,
+        type=int,
+        help="The window size to record approximate positional information. "
+        "The default 0 disables recording this information. When not zero, "
+        "overlapping windows of size window*2 approximates positions are recorded. "
+        "This can be used for proximity queries. Smaller values require more space, but "
+        "enable precise querying.",
+    )
+    def corpus_indexer(corpus_db, index_db, doc_batch_size, position_window_size):
+        """
+        Creates the index database representing the given corpus.
+
+        If the index already exists it will be reindexed.
+
+        """
+        click.echo(f"Indexing {corpus_db} into {index_db}.")
+
+        doc_corpus = CorpusType(corpus_db)
+        doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
+
+        doc_index.index(
+            doc_batch_size=doc_batch_size, position_window_size=position_window_size
+        )
+
+    return corpus_indexer
+
+
 # The main entry command is always hyperreal
 @click.group(name="hyperreal")
 def cli():
@@ -93,51 +133,6 @@ def plaintext_corpus_create(text_file, corpus_db):
         doc_corpus.replace_docs(docs)
 
 
-@plaintext_corpus.command(name="index")
-@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
-@click.argument("index_db", type=click.Path(dir_okay=False))
-@click.option(
-    "--doc-batch-size",
-    type=int,
-    default=DEFAULT_DOC_BATCH_SIZE,
-    help="The size of individual batches of documents sent for indexing. "
-    "Larger sizes will require more ram, but might be more efficient for "
-    "large collections.",
-)
-@click.option(
-    "--skipgram-window-size",
-    default=0,
-    help="Size of window to extract skipgrams from. "
-    "Default is 0, which disables this functionality",
-)
-@click.option(
-    "--skipgram-min-docs",
-    default=3,
-    help="Minimum number of docs containing a skipgram for the count to be retained. "
-    "This threshold limits the size of the table used to store skipgrams - set to 1 "
-    "to keep all counts (not recommended).",
-)
-def plaintext_corpus_index(
-    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
-):
-    """
-    Creates the index database representing the given plaintext corpus.
-
-    If the index already exists it will be reindexed.
-
-    """
-    click.echo(f"Indexing {corpus_db} into {index_db}.")
-
-    doc_corpus = hyperreal.corpus.PlainTextSqliteCorpus(corpus_db)
-    doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
-
-    doc_index.index(
-        doc_batch_size=doc_batch_size,
-        skipgram_window_size=skipgram_window_size,
-        skipgram_min_docs=skipgram_min_docs,
-    )
-
-
 @plaintext_corpus.command(name="serve")
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
@@ -162,6 +157,10 @@ def plaintext_corpus_serve(corpus_db, index_db):
         )
         hyperreal.server.launch_web_server(index_server)
 
+
+plaintext_corpus.command(name="index")(
+    make_two_file_indexer(hyperreal.corpus.PlainTextSqliteCorpus)
+)
 
 plaintext_corpus.command(name="sample")(
     make_csv_exporter(hyperreal.corpus.PlainTextSqliteCorpus)
@@ -202,51 +201,6 @@ def stackexchange_corpus_add_site(
     doc_corpus.add_site_data(posts_file, comments_file, users_file, site_url)
 
 
-@stackexchange_corpus.command(name="index")
-@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
-@click.argument("index_db", type=click.Path(dir_okay=False))
-@click.option(
-    "--doc-batch-size",
-    type=int,
-    default=DEFAULT_DOC_BATCH_SIZE,
-    help="The size of individual batches of documents sent for indexing. "
-    "Larger sizes will require more ram, but might be more efficient for "
-    "large collections.",
-)
-@click.option(
-    "--skipgram-window-size",
-    default=0,
-    help="Size of window to extract skipgrams from. "
-    "Default is 0, which disables this functionality",
-)
-@click.option(
-    "--skipgram-min-docs",
-    default=3,
-    help="Minimum number of docs containing a skipgram for the count to be retained. "
-    "This threshold limits the size of the table used to store skipgrams - set to 1 "
-    "to keep all counts (not recommended).",
-)
-def stackexchange_corpus_index(
-    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
-):
-    """
-    Creates the index database representing the given Stack Exchange corpus.
-
-    If the index already exists it will be reindexed.
-
-    """
-    click.echo(f"Indexing {corpus_db} into {index_db}.")
-
-    doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
-    doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
-
-    doc_index.index(
-        doc_batch_size=doc_batch_size,
-        skipgram_window_size=skipgram_window_size,
-        skipgram_min_docs=skipgram_min_docs,
-    )
-
-
 @stackexchange_corpus.command(name="serve")
 @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
@@ -276,55 +230,19 @@ stackexchange_corpus.command(name="sample")(
     make_csv_exporter(hyperreal.corpus.StackExchangeCorpus)
 )
 
+stackexchange_corpus.command(name="index")(
+    make_two_file_indexer(hyperreal.corpus.StackExchangeCorpus)
+)
+
 
 @cli.group()
 def twittersphere_corpus():
     pass
 
 
-@twittersphere_corpus.command(name="index")
-@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
-@click.argument("index_db", type=click.Path(dir_okay=False))
-@click.option(
-    "--doc-batch-size",
-    type=int,
-    default=100000,
-    help="The size of individual batches of documents sent for indexing. "
-    "Larger sizes will require more ram, but might be more efficient for "
-    "large collections.",
+twittersphere_corpus.command(name="index")(
+    make_two_file_indexer(hyperreal.corpus.TwittersphereCorpus)
 )
-@click.option(
-    "--skipgram-window-size",
-    default=0,
-    help="Size of window to extract skipgrams from. "
-    "Default is 0, which disables this functionality",
-)
-@click.option(
-    "--skipgram-min-docs",
-    default=3,
-    help="Minimum number of docs containing a skipgram for the count to be retained. "
-    "This threshold limits the size of the table used to store skipgrams - set to 1 "
-    "to keep all counts (not recommended).",
-)
-def twittersphere_corpus_index(
-    corpus_db, index_db, doc_batch_size, skipgram_window_size, skipgram_min_docs
-):
-    """
-    Creates the index database representing the given Stack Exchange corpus.
-
-    If the index already exists it will be reindexed.
-
-    """
-    click.echo(f"Indexing {corpus_db} into {index_db}.")
-
-    doc_corpus = hyperreal.corpus.TwittersphereCorpus(corpus_db)
-    doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus)
-
-    doc_index.index(
-        doc_batch_size=doc_batch_size,
-        skipgram_window_size=skipgram_window_size,
-        skipgram_min_docs=skipgram_min_docs,
-    )
 
 
 @twittersphere_corpus.command(name="serve")

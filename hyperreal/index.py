@@ -327,8 +327,7 @@ class Index:
         doc_batch_size=1000,
         working_dir=None,
         workers=None,
-        skipgram_window_size=0,
-        skipgram_min_docs=3,
+        position_window_size=0,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -407,7 +406,7 @@ class Index:
                             batch_doc_ids,
                             batch_doc_keys,
                             temp_index,
-                            skipgram_window_size,
+                            position_window_size,
                             write_lock,
                         )
                     )
@@ -432,7 +431,7 @@ class Index:
                         batch_doc_ids,
                         batch_doc_keys,
                         temp_index,
-                        skipgram_window_size,
+                        position_window_size,
                         write_lock,
                     )
                 )
@@ -487,7 +486,6 @@ class Index:
             # Now process the position buckets in order - since the
             # feature_ids are maintained in a separate table this can just be
             # a drop and reload
-
             self.db.execute("drop table if exists inverted_position_index")
             self.db.execute(
                 """
@@ -564,31 +562,6 @@ class Index:
                         where ii.feature_id = feature_cluster.feature_id
                     )
                 """
-            )
-
-            self.db.execute("DELETE from skipgram_count")
-
-            self.db.execute(
-                """
-                insert into skipgram_count
-                    select
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (sc.field, sc.value_a)
-                        ),
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (sc.field, sc.value_b)
-                        ),
-                        distance,
-                        sum(docs_count) as total_docs
-                    from tempindex.skipgram_count sc
-                    group by field, value_a, value_b, distance
-                    having total_docs >= ?
-                """,
-                [skipgram_min_docs],
             )
 
             # Write the field summary
@@ -1879,7 +1852,7 @@ class Index:
 
 
 def _index_docs(
-    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock
+    corpus, doc_ids, doc_keys, temp_db_path, position_window_size, write_lock
 ):
     """Index all of the given docs into temp_db_path."""
 
@@ -1892,31 +1865,19 @@ def _index_docs(
         # Mapping of fields -> doc_ids -> bucket locations for the positions index
         field_position_bucket = collections.defaultdict(lambda: [0])
 
-        # The structure is (distance, field, value_a, value_b: count)
-        skipgram_counts = [
-            collections.defaultdict(
-                lambda: collections.defaultdict(collections.Counter)
-            )
-            for _ in range(skipgram_window_size)
-        ]
-
         docs = corpus.docs(doc_keys=doc_keys)
 
         for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
             for field, values in features.items():
-                # Only find bigrams in sequences - non sequence types such as
-                # a set don't make sense to do this.
-                if skipgram_window_size > 0 and isinstance(
-                    values, collections.abc.Sequence
+                # Only record position information if there is a
+                # position_window_size set, and the field is an ordered
+                # sequence type.
+                if (
+                    position_window_size
+                    and isinstance(values, collections.abc.Sequence)
+                    and len(values) > 1
                 ):
-                    bigrams = utilities.long_distance_bigrams(
-                        values, skipgram_window_size
-                    )
-                    for item_a, item_b, distance in bigrams:
-                        skipgram_counts[distance - 1][field][item_a][item_b] += 1
-
-                if isinstance(values, collections.abc.Sequence) and len(values) > 1:
                     current_bucket = field_position_bucket[field][-1]
                     used_bucket = False
 
@@ -1928,7 +1889,7 @@ def _index_docs(
                             used_bucket = False
                             continue
 
-                        if not ((position + 1) % 32):
+                        if not ((position + 1) % position_window_size):
                             current_bucket += 1
 
                         batch[field][value][1].add(current_bucket)
@@ -2029,37 +1990,6 @@ def _index_docs(
                         if values[value][1]
                     ),
                 )
-
-            local_db.execute(
-                """
-                CREATE table if not exists skipgram_count(
-                    field text,
-                    value_a,
-                    value_b,
-                    distance integer,
-                    docs_count integer
-                )
-                """
-            )
-
-            # TODO: The data structure for this has the wrong layout to be
-            # able to work nicely in sorted order.
-            for i, f in enumerate(skipgram_counts):
-                distance = i + 1
-                for field in field_order:
-                    item_as = f[field]
-                    a_order = sorted(item_as.keys())
-
-                    for item_a in a_order:
-                        item_bs = item_as[item_a]
-
-                        local_db.executemany(
-                            "INSERT into skipgram_count values(?, ?, ?, ?, ?)",
-                            (
-                                (field, item_a, item_b, distance, c)
-                                for item_b, c in sorted(item_bs.items())
-                            ),
-                        )
 
             local_db.execute("commit")
 
