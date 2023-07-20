@@ -38,9 +38,29 @@ CURRENT_SCHEMA = f"""
     create table if not exists position_doc (
         field,
         position_end,
+        position_count integer,
         doc_id integer references doc_key(doc_id) on delete cascade,
         primary key (field, position_end)
     ) without rowid;
+
+    --------
+    create table if not exists position_doc (
+        field,
+        position_end,
+        position_count integer,
+        doc_id integer references doc_key(doc_id) on delete cascade,
+        primary key (field, position_end)
+    ) without rowid;
+
+    --------
+    create index if not exists doc_position on position_doc(
+        doc_id,
+        field,
+        position_end,
+        -- Note we materialise this column so this can
+        -- always be used as a covering index.
+        position_count
+    );
 
     --------
     create table if not exists field_summary (

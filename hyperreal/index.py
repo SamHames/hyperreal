@@ -532,7 +532,8 @@ class Index:
                 """
             )
 
-            # Map flat positions to document ids
+            # Map flat positions to document ids by unrolling everything to
+            # rows for lookups
             position_doc_map = self.db.execute(
                 """
                 select
@@ -554,16 +555,20 @@ class Index:
                 doc_position_ends,
                 shift,
             ) in position_doc_map:
-                self.db.executemany(
-                    "insert into position_doc values(?, ?, ?)",
-                    (
-                        (field, doc_id, end_position)
-                        for doc_id, end_position in zip(
-                            range(first_doc_id, last_doc_id + 1),
-                            doc_position_ends.shift(shift),
-                        )
-                    ),
-                )
+                prev_offset = 0
+                for doc_id, end_position, offset in zip(
+                    range(first_doc_id, last_doc_id + 1),
+                    # The actual global positions
+                    doc_position_ends.shift(shift),
+                    # The offsets for position lengths of this
+                    # document.
+                    doc_position_ends,
+                ):
+                    self.db.execute(
+                        "insert into position_doc values(?, ?, ?, ?)",
+                        (field, end_position, offset - prev_offset, doc_id),
+                    )
+                    prev_offset = offset
 
             # Update docs_counts in the clusters
             self.db.execute(
