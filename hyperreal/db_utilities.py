@@ -66,7 +66,8 @@ class RoaringShiftUnion:
         self.bitmap = pyroaring.BitMap()
 
     def step(self, bitmap, shift):
-        self.bitmap |= pyroaring.BitMap.deserialize(bitmap).shift(shift)
+        if bitmap is not None:
+            self.bitmap |= pyroaring.BitMap.deserialize(bitmap).shift(shift)
 
     def finalize(self):
         return save_bitmap(self.bitmap)

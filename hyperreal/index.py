@@ -440,31 +440,17 @@ class Index:
 
             # Zero out existing features, but don't reassign them
             self.db.execute(
-                "update inverted_index set docs_count = 0, doc_ids = ?",
+                """
+                update inverted_index set
+                    docs_count = 0,
+                    doc_ids = ?1,
+                    position_count = 0,
+                    positions = null
+                """,
                 [BitMap()],
             )
 
             # Also reset the positions table.
-            self.db.execute("drop table if exists inverted_position_index")
-            self.db.execute(
-                """
-                create table main.inverted_position_index (
-                    feature_id integer primary key references inverted_index on delete cascade,
-                    position_count,
-                    positions roaring_bitmap
-                )
-                """
-            )
-            self.db.execute(
-                """
-                create table if not exists main.position_doc (
-                    field,
-                    position_end,
-                    doc_id integer references doc_key(doc_id) on delete cascade,
-                    primary key (field, position_end)
-                ) without rowid
-                """
-            )
             self.db.execute("delete from main.position_doc")
 
             # Make sure all of the batches have completed.
@@ -479,33 +465,14 @@ class Index:
             detach = True
 
             self.db.execute(
-                "create index tempindex.field_value on inverted_index_segment(field, value)"
-            )
-
-            self.db.execute(
-                "create index tempindex.field_value_doc_ids on "
-                "inverted_position_index_segment(field, value, first_doc_id)"
-            )
-
-            # Actually populate the new values
-            self.db.execute(
                 """
-                replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
-                    select
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (iis.field, iis.value)
-                        ),
-                        field,
-                        value,
-                        sum(docs_count) as docs_count,
-                        roaring_union(doc_ids) as doc_ids
-                    from inverted_index_segment iis
-                    group by field, value
+                create index tempindex.field_value on inverted_index_segment(
+                    field, value, first_doc_id
+                )
                 """
             )
 
+            # Calculate shift values for the positional information
             self.db.execute(
                 """
                 create table tempindex.position_shift (
@@ -543,6 +510,28 @@ class Index:
                     )
                     next_position_shift += last_position
 
+            # Actually populate the new values
+            self.db.execute(
+                """
+                replace into inverted_index(feature_id, field, value, docs_count, doc_ids, position_count, positions)
+                    select
+                        (
+                            select feature_id
+                            from inverted_index ii
+                            where (ii.field, ii.value) = (iis.field, iis.value)
+                        ),
+                        field,
+                        value,
+                        sum(docs_count) as docs_count,
+                        roaring_union(doc_ids) as doc_ids,
+                        sum(position_count) as position_count,
+                        roaring_shift_union(positions, position_shift) as positions
+                    from inverted_index_segment iis
+                    left outer join tempindex.position_shift using(field, first_doc_id)
+                    group by field, value
+                """
+            )
+
             # Map flat positions to document ids
             position_doc_map = self.db.execute(
                 """
@@ -575,24 +564,6 @@ class Index:
                         )
                     ),
                 )
-
-            # Actually populate the new values, shifting positions as we go
-            self.db.execute(
-                """
-                insert into inverted_position_index(feature_id, position_count, positions)
-                    select
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (ipis.field, ipis.value)
-                        ),
-                        sum(position_count) as position_count,
-                        roaring_shift_union(positions, position_shift) as positions
-                    from inverted_position_index_segment ipis
-                    inner join tempindex.position_shift using(field, first_doc_id)
-                    group by field, value
-                """
-            )
 
             # Update docs_counts in the clusters
             self.db.execute(
@@ -1997,16 +1968,7 @@ def _index_docs(
                     field text,
                     value,
                     docs_count,
-                    doc_ids roaring_bitmap
-                )
-                """
-            )
-
-            local_db.execute(
-                """
-                CREATE table if not exists inverted_position_index_segment(
-                    field text,
-                    value,
+                    doc_ids roaring_bitmap,
                     position_count,
                     positions roaring_bitmap,
                     first_doc_id
@@ -2049,25 +2011,18 @@ def _index_docs(
                 value_order = sorted(v for v in values if v is not None)
 
                 local_db.executemany(
-                    "insert into inverted_index_segment values(?, ?, ?, ?)",
-                    (
-                        (field, value, len(values[value][0]), values[value][0])
-                        for value in value_order
-                    ),
-                )
-
-                local_db.executemany(
-                    "insert into inverted_position_index_segment values(?, ?, ?, ?, ?)",
+                    "insert into inverted_index_segment values(?, ?, ?, ?, ?, ?, ?)",
                     (
                         (
                             field,
                             value,
+                            len(values[value][0]),
+                            values[value][0],
                             len(values[value][1]),
-                            values[value][1],
+                            values[value][1] or None,
                             doc_ids[0],
                         )
                         for value in value_order
-                        if values[value][1]
                     ),
                 )
 

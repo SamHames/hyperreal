@@ -107,9 +107,9 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
         assert (field, value) == features_field_values[feature_id]
 
     i.index(doc_batch_size=100, position_window_size=-1)
-    positions = list(
-        i.db.execute("select sum(position_count) from inverted_position_index")
-    )[0][0]
+    positions = list(i.db.execute("select sum(position_count) from inverted_index"))[0][
+        0
+    ]
     assert positions == target_positions
 
 
