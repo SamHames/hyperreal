@@ -381,7 +381,7 @@ class Index:
             # sequentially
             doc_keys = enumerate(self.corpus.keys())
 
-            batch_doc_ids = []
+            batch_doc_ids = BitMap()
             batch_doc_keys = []
             batch_size = 0
 
@@ -391,7 +391,7 @@ class Index:
 
             for doc_key in doc_keys:
                 self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                batch_doc_ids.append(doc_key[0])
+                batch_doc_ids.add(doc_key[0])
                 batch_doc_keys.append(doc_key[1])
                 batch_size += 1
 
@@ -410,7 +410,7 @@ class Index:
                             write_lock,
                         )
                     )
-                    batch_doc_ids = []
+                    batch_doc_ids = BitMap()
                     batch_doc_keys = []
                     batch_size = 0
 
@@ -448,6 +448,11 @@ class Index:
                     positions = null
                 """,
                 [BitMap()],
+            )
+
+            self.db.execute(
+                "replace into settings values('position_window_size', ?)",
+                [position_window_size],
             )
 
             # Also reset the positions table.
@@ -538,9 +543,8 @@ class Index:
                 """
                 select
                     field,
-                    first_doc_id,
-                    last_doc_id,
-                    doc_position_ends,
+                    doc_ids,
+                    doc_position_starts,
                     position_shift
                 from batch_position
                 inner join position_shift using(field, first_doc_id)
@@ -550,25 +554,23 @@ class Index:
 
             for (
                 field,
-                first_doc_id,
-                last_doc_id,
-                doc_position_ends,
+                doc_ids,
+                doc_position_starts,
                 shift,
             ) in position_doc_map:
-                prev_offset = 0
-                for doc_id, end_position, offset in zip(
-                    range(first_doc_id, last_doc_id + 1),
+                for doc_id, global_start_pos, start_pos, end_pos in zip(
+                    doc_ids,
                     # The actual global positions
-                    doc_position_ends.shift(shift),
+                    doc_position_starts.shift(shift),
                     # The offsets for position lengths of this
                     # document.
-                    doc_position_ends,
+                    doc_position_starts,
+                    doc_position_starts[1:],
                 ):
                     self.db.execute(
                         "insert into position_doc values(?, ?, ?, ?)",
-                        (field, end_position, offset - prev_offset, doc_id),
+                        (field, global_start_pos, end_pos - start_pos, doc_id),
                     )
-                    prev_offset = offset
 
             # Update docs_counts in the clusters
             self.db.execute(
@@ -1875,19 +1877,24 @@ def _index_docs(
     """
     Index all of the given docs into temp_db_path.
 
-    position_window_size has three modes:
+    position_window_size has two modes:
 
     0 - disabled, no position information will be recorded.
-    > 0 - approximate position windows of the given half width will be created.
-    < 0 - an exclusive window flat position index of size abs(position_window_size)
-        will be created. A value of -1 is an exact flat position index as described
-        in https://dl.acm.org/doi/abs/10.1145/2063576.2063875
+    > 0 - approximate position windows of the given half width will be
+      created. Coocurrence of values can be found exactly up to 2 *
+      position_window_size - note that edge effects mean that the position
+      windows will miss cooccurence across window boundaries which is why the
+      limit is 2*position_window_size not position_window_size. Note that
+      setting this to 1 computes an exact position index.
 
     """
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
+        if len(doc_ids) != len(doc_keys):
+            raise ValueError("There must be exactly one doc_id for every doc_key.")
+
         # Mapping of {field: {value: (BitMap(), BitMap())}}
         # One bitmap for document occurrence, the other other for recording
         # positional information.
@@ -1896,67 +1903,32 @@ def _index_docs(
         )
 
         # Mapping of fields -> position ends for each document.
-        field_doc_position = collections.defaultdict(lambda: [0])
+        field_doc_position = collections.defaultdict(lambda: BitMap([0]))
 
         docs = corpus.docs(doc_keys=doc_keys)
 
-        approx_positions = position_window_size > 0
-        position_window_size = abs(position_window_size)
-
         for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
+
             for field, values in features.items():
                 # Only record position information if there is a
                 # position_window_size set, and the field is an ordered
                 # sequence type.
-                if (
-                    position_window_size
-                    and isinstance(values, collections.abc.Sequence)
-                    and len(values) > 1
+                if position_window_size and isinstance(
+                    values, collections.abc.Sequence
                 ):
-                    current_position = field_doc_position[field][-1]
-                    position_size = 0
-                    used_position = False
+                    batch_position = field_doc_position[field][-1]
 
-                    for value in values:
-                        if value is None:
-                            # Note - needed to handle strings of sentinel
-                            # values We add two because the approximate
-                            # position assigns every value to two positions to
-                            # handle edge effects.
-                            if used_position and approx_positions:
-                                current_position += 2
-                                position_size = 0
+                    position_values = utilities.approximate_positions_with_sentinels(
+                        values, position_window_size
+                    )
 
-                            # Exact position recording for negative position
-                            # windows.
-                            elif used_position:
-                                current_position += 1
-                                position_size = 0
+                    for position, value in position_values:
+                        batch[field][value][1].add(position + batch_position)
 
-                            used_position = False
-                            continue
-
-                        batch[field][value][1].add(current_position)
-
-                        if approx_positions:
-                            batch[field][value][1].add(current_position + 1)
-
-                        used_position = True
-
-                        position_size += 1
-
-                        if not (position_size % position_window_size):
-                            current_position += 1
-                            position_size = 0
-
-                    else:
-                        if used_position and approx_positions:
-                            field_doc_position[field].append(current_position + 2)
-                        elif used_position:
-                            field_doc_position[field].append(current_position + 1)
-                        else:
-                            field_doc_position[field].append(current_position)
+                    # Record offset for the start of the next positions in this
+                    # field for this batch.
+                    field_doc_position[field].add(position + batch_position + 1)
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -1986,27 +1958,25 @@ def _index_docs(
                 CREATE table if not exists batch_position(
                     field,
                     first_doc_id,
-                    last_doc_id,
-                    doc_position_ends roaring_bitmap,
+                    doc_ids roaring_bitmap,
+                    doc_position_starts roaring_bitmap,
                     last_doc_position,
                     primary key (field, first_doc_id)
                 )
                 """
             )
 
-            local_db.executemany(
-                "insert into batch_position values(?, ?, ?, ?, ?)",
-                (
+            for field, position_starts in field_doc_position.items():
+                local_db.execute(
+                    "insert into batch_position values(?, ?, ?, ?, ?)",
                     (
                         field,
                         doc_ids[0],
-                        doc_ids[-1],
-                        BitMap(position_starts[1:]),
+                        doc_ids,
+                        position_starts,
                         position_starts[-1],
-                    )
-                    for field, position_starts in field_doc_position.items()
-                ),
-            )
+                    ),
+                )
 
             # Ensure we do all the inserts in sorted order as far as possible
             field_order = sorted(batch.keys())

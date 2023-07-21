@@ -68,11 +68,15 @@ def make_two_file_indexer(CorpusType):
         "--position-window-size",
         default=0,
         type=int,
-        help="The window size to record approximate positional information. "
-        "The default 0 disables recording this information. When not zero, "
-        "overlapping windows of size window*2 approximates positions are recorded. "
-        "This can be used for proximity queries. Smaller values require more space, but "
-        "enable precise querying.",
+        help="""
+        The window size to record approximate positional information. The
+        default value of 0 disables recording this information. When > 0,
+        approximate positions of values are recorded up to the given
+        granularity. Smaller values require more space, but enable precise
+        querying. Setting position size to 1 enables recording of exact term
+        positions and precise querying for phrases, but currently only 2**32
+        positions can be recorded in a single field.
+        """,
     )
     def corpus_indexer(corpus_db, index_db, doc_batch_size, position_window_size):
         """
@@ -88,8 +92,6 @@ def make_two_file_indexer(CorpusType):
         mp_context = mp.get_context("spawn")
         with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
             doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus, pool=pool)
-
-            click.echo(f"{position_window_size=}")
 
             doc_index.index(
                 doc_batch_size=doc_batch_size, position_window_size=position_window_size

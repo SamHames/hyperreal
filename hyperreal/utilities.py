@@ -205,3 +205,67 @@ def weight_bitslice(bitslice):
 
     for key, group in grouped:
         yield key, sum(g[1] for g in group)
+
+
+def approximate_positions_with_sentinels(values, position_window_size):
+    """
+    Turn a Sequence of values into a generator of (position_bucket, value).
+
+    This function handles None as sentinel values to enforce position breaks
+    and the rounding of position values.
+
+    Examples:
+
+    This is position_window_size = 1, which is the exact position case.
+
+    >>> list(approximate_positions_with_sentinels(['the', 'cat', 'sat'], 1))
+    [(0, 'the'), (1, 'cat'), (2, 'sat')]
+
+    Approximate positions (position_window_size > 1) accumulate multiple
+    values into the same position as in the following examples for 2, 3:
+
+    >>> list(approximate_positions_with_sentinels(['the', 'cat', 'sat'], 2))
+    [(0, 'the'), (0, 'cat'), (1, 'sat')]
+
+    >>> values = "the cat sat on the mat".split()
+    >>> list(approximate_positions_with_sentinels(values, 3))
+    [(0, 'the'), (0, 'cat'), (0, 'sat'), (1, 'on'), (1, 'the'), (1, 'mat')]
+
+    'None' values are sentinel markers to terminate the position bucket
+    earlier. This can be used to control breaking more finely in a stream
+    of tokens than would otherwise be possible.
+
+    >>> values.insert(3, None)
+    >>> list(approximate_positions_with_sentinels(values, 2))
+    [(0, 'the'), (0, 'cat'), (1, 'sat'), (2, 'on'), (2, 'the'), (3, 'mat')]
+
+    Lastly a negative position value only changes position at sentinel None's.
+    This allows you to control everything about the procedure.
+
+    >>> list(approximate_positions_with_sentinels(values, -2))
+    [(0, 'the'), (0, 'cat'), (0, 'sat'), (1, 'on'), (1, 'the'), (1, 'mat')]
+
+    """
+
+    current_position = 0
+    current_size = 0
+
+    for value in values:
+        if value is None:
+            # If we've placed anything in the current bucket, we
+            # need to advance the position counter - otherwise
+            # we can just keep advancing. This turns consecutive
+            # sentinels into a single sentinel.
+            if current_size:
+                current_position += 1
+                current_size = 0
+
+            continue
+
+        current_size += 1
+
+        yield (current_position, value)
+
+        if current_size == position_window_size:
+            current_position += 1
+            current_size = 0

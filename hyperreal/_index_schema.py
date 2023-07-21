@@ -17,6 +17,16 @@ MAGIC_APPLICATION_ID = 715973853
 CURRENT_SCHEMA_VERSION = 9
 
 CURRENT_SCHEMA = f"""
+    create table if not exists settings (
+        key primary key,
+        value
+    );
+
+    --------
+    -- Migrated indexes will have no position information.
+    replace into settings values('position_window_size', 0);
+
+    --------
     create table if not exists doc_key (
         doc_id integer primary key,
         doc_key unique
@@ -37,26 +47,17 @@ CURRENT_SCHEMA = f"""
     --------
     create table if not exists position_doc (
         field,
-        position_end,
+        position_start,
         position_count integer,
         doc_id integer references doc_key(doc_id) on delete cascade,
-        primary key (field, position_end)
-    ) without rowid;
-
-    --------
-    create table if not exists position_doc (
-        field,
-        position_end,
-        position_count integer,
-        doc_id integer references doc_key(doc_id) on delete cascade,
-        primary key (field, position_end)
+        primary key (field, position_start)
     ) without rowid;
 
     --------
     create index if not exists doc_position on position_doc(
         doc_id,
         field,
-        position_end,
+        position_start,
         -- Note we materialise this column so this can
         -- always be used as a covering index.
         position_count

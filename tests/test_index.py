@@ -77,40 +77,59 @@ corpora_test_cases = [
 def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     """Test that all builtin corpora can be successfully indexed and queried."""
     c = corpus(*args, **kwargs)
-    i = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c, pool=pool)
+    idx = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c, pool=pool)
 
     # These are actually very bad settings, but necessary for checking
     # all code paths and concurrency.
-    i.index(doc_batch_size=10)
+    idx.index(doc_batch_size=10)
 
     # Compare against the actual test data.
     target_docs, target_nnz, target_positions = check_stats()
 
-    nnz = list(i.db.execute("select sum(docs_count) from inverted_index"))[0][0]
-    total_docs = list(i.db.execute("select count(*) from doc_key"))[0][0]
+    nnz = list(idx.db.execute("select sum(docs_count) from inverted_index"))[0][0]
+    total_docs = list(idx.db.execute("select count(*) from doc_key"))[0][0]
     assert total_docs == target_docs
     assert nnz == target_nnz
 
     # Feature ids should remain the same across indexing runs
     features_field_values = {
         feature_id: (field, value)
-        for feature_id, field, value in i.db.execute(
+        for feature_id, field, value in idx.db.execute(
             "select feature_id, field, value from inverted_index"
         )
     }
 
-    i.index(doc_batch_size=10)
+    idx.index(doc_batch_size=10)
 
-    for feature_id, field, value in i.db.execute(
+    for feature_id, field, value in idx.db.execute(
         "select feature_id, field, value from inverted_index"
     ):
         assert (field, value) == features_field_values[feature_id]
 
-    i.index(doc_batch_size=100, position_window_size=-1)
-    positions = list(i.db.execute("select sum(position_count) from inverted_index"))[0][
-        0
-    ]
-    assert positions == target_positions
+    for p in [1, 5, 10]:
+        idx.index(doc_batch_size=1, position_window_size=p)
+
+        positions = list(
+            idx.db.execute("select sum(position_count) from inverted_index")
+        )[0][0]
+
+        if p == 1:
+            assert positions == target_positions
+
+        # Make sure that there's information for every document with
+        # positional information.
+        assert not list(
+            idx.db.execute(
+                """
+                select 1
+                from doc_key
+                where doc_id not in (
+                    select doc_id
+                    from position_doc
+                )
+                """
+            )
+        )
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
@@ -484,9 +503,9 @@ def test_indexing_utility(example_index_corpora_path, tmp_path, pool):
 
     temp_index = tmp_path / "tempindex.db"
 
-    doc_keys = list(range(1, 100))
+    doc_keys = BitMap(range(1, 100))
     doc_ids = doc_keys
 
     hyperreal.index._index_docs(
-        corpus, doc_keys, doc_ids, str(temp_index), -1, mp.Lock()
+        corpus, doc_keys, doc_ids, str(temp_index), 1, mp.Lock()
     )
