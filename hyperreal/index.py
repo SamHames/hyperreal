@@ -175,6 +175,12 @@ class Index:
 
         self.corpus = corpus
 
+        self.position_window_size = list(
+            self.db.execute(
+                "select value from settings where key = 'position_window_size'"
+            )
+        )[0][0]
+
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
         # decremented on leaving. Housekeeping functions will run when leaving
@@ -624,6 +630,7 @@ class Index:
 
             tempdir.cleanup()
 
+        self.position_window_size = position_window_size
         self.logger.info("Indexing completed.")
 
     @atomic()
@@ -637,6 +644,22 @@ class Index:
                 )
             )[0][0]
             yield doc_key
+
+    @atomic()
+    def convert_positions_to_query(self, field, positions):
+        """
+        Convert a bitset of positions in a field into a set of doc_ids.
+
+        """
+        pass
+
+    @atomic()
+    def convert_query_to_field_positions(self, field, query):
+        """
+        Convert a set of doc_ids into positions for a specific field.
+
+        """
+        pass
 
     @requires_corpus(corpus.BaseCorpus)
     def docs(self, query):
