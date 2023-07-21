@@ -17,6 +17,7 @@ it does better with malformed XML data in general.
 
 from collections import defaultdict, namedtuple
 import concurrent.futures as cf
+import logging
 import multiprocessing as mp
 import os
 import traceback
@@ -58,7 +59,7 @@ class HansardCorpus(SqliteBackedCorpus):
             "insert into subdebate values (?, ?, ?, ?, ?, ?)", rows["subdebate"]
         )
         self.db.executemany(
-            "insert into speech values (?, ?, ?, ?, ?, ?, ?)", rows["speech"]
+            "insert into speech values (null, ?, ?, ?, ?, ?, ?, ?)", rows["speech"]
         )
 
     def docs(self, doc_keys=None):
@@ -74,7 +75,7 @@ class HansardCorpus(SqliteBackedCorpus):
                     self.db.execute(
                         """
                         select
-                            speech.rowid,
+                            speech.speech_id,
                             speech,
                             date,
                             house,
@@ -84,7 +85,7 @@ class HansardCorpus(SqliteBackedCorpus):
                         left outer join session using (date, house)
                         left outer join debate using (date, house, debate_no)
                         left outer join subdebate using (date, house, debate_no, subdebate_no)
-                        where speech.rowid = ?
+                        where speech.speech_id = ?
                         """,
                         [key],
                     )
@@ -146,8 +147,8 @@ class HansardCorpus(SqliteBackedCorpus):
         return list(self.docs(doc_keys=doc_keys))
 
     def keys(self):
-        """The keys are the rowids on the speech table."""
-        return (r["rowid"] for r in self.db.execute("select rowid from speech"))
+        """The speeches are the central document."""
+        return (r["speech_id"] for r in self.db.execute("select speech_id from speech"))
 
     def replace_speeches(self, historic_zip, current_zip):
         """
@@ -207,6 +208,7 @@ class HansardCorpus(SqliteBackedCorpus):
             self.db.execute(
                 """
                 create table speech(
+                    speech_id integer primary key,
                     date,
                     house,
                     debate_no,
@@ -214,7 +216,7 @@ class HansardCorpus(SqliteBackedCorpus):
                     speech_no,
                     speech_type,
                     speech,
-                    primary key (
+                    unique (
                         date,
                         house,
                         debate_no,
@@ -607,8 +609,12 @@ def process_xml_current(xml_data, source_file):
 
 
 if __name__ == "__main__":
-    __spec__ = None
+    try:
+        os.remove("process_hansard.log")
+    except FileNotFoundError:
+        pass
 
+    logging.basicConfig(filename="process_hansard.log", level=logging.INFO)
     corpus = HansardCorpus("test.db")
 
     corpus.replace_speeches(
@@ -619,7 +625,7 @@ if __name__ == "__main__":
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
         idx = Index("test_index.db", corpus=corpus, pool=pool)
-        idx.index()
+        idx.index(position_window_size=5, doc_batch_size=10000)
 
         index_server = hyperreal.server.SingleIndexServer(
             "test_index.db",
