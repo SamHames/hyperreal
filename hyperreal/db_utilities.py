@@ -28,6 +28,7 @@ def connect_sqlite(db_path, row_factory=None):
     )
 
     conn.create_aggregate("roaring_union", 1, RoaringUnion)
+    conn.create_aggregate("roaring_shift_union", 2, RoaringShiftUnion)
 
     if row_factory:
         conn.row_factory = row_factory
@@ -36,6 +37,7 @@ def connect_sqlite(db_path, row_factory=None):
 
 
 def save_bitmap(bm):
+    bm.run_optimize()
     return bm.serialize()
 
 
@@ -56,4 +58,16 @@ class RoaringUnion:
         self.bitmap |= pyroaring.BitMap.deserialize(bitmap)
 
     def finalize(self):
-        return self.bitmap.serialize()
+        return save_bitmap(self.bitmap)
+
+
+class RoaringShiftUnion:
+    def __init__(self):
+        self.bitmap = pyroaring.BitMap()
+
+    def step(self, bitmap, shift):
+        if bitmap is not None:
+            self.bitmap |= pyroaring.BitMap.deserialize(bitmap).shift(shift)
+
+    def finalize(self):
+        return save_bitmap(self.bitmap)

@@ -175,6 +175,12 @@ class Index:
 
         self.corpus = corpus
 
+        self.position_window_size = list(
+            self.db.execute(
+                "select value from settings where key = 'position_window_size'"
+            )
+        )[0][0]
+
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
         # decremented on leaving. Housekeeping functions will run when leaving
@@ -327,8 +333,7 @@ class Index:
         doc_batch_size=1000,
         working_dir=None,
         workers=None,
-        skipgram_window_size=0,
-        skipgram_min_docs=3,
+        position_window_size=0,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -382,7 +387,7 @@ class Index:
             # sequentially
             doc_keys = enumerate(self.corpus.keys())
 
-            batch_doc_ids = []
+            batch_doc_ids = BitMap()
             batch_doc_keys = []
             batch_size = 0
 
@@ -392,7 +397,7 @@ class Index:
 
             for doc_key in doc_keys:
                 self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                batch_doc_ids.append(doc_key[0])
+                batch_doc_ids.add(doc_key[0])
                 batch_doc_keys.append(doc_key[1])
                 batch_size += 1
 
@@ -407,11 +412,11 @@ class Index:
                             batch_doc_ids,
                             batch_doc_keys,
                             temp_index,
-                            skipgram_window_size,
+                            position_window_size,
                             write_lock,
                         )
                     )
-                    batch_doc_ids = []
+                    batch_doc_ids = BitMap()
                     batch_doc_keys = []
                     batch_size = 0
 
@@ -432,7 +437,7 @@ class Index:
                         batch_doc_ids,
                         batch_doc_keys,
                         temp_index,
-                        skipgram_window_size,
+                        position_window_size,
                         write_lock,
                     )
                 )
@@ -441,9 +446,23 @@ class Index:
 
             # Zero out existing features, but don't reassign them
             self.db.execute(
-                "update inverted_index set docs_count = 0, doc_ids = ?",
+                """
+                update inverted_index set
+                    docs_count = 0,
+                    doc_ids = ?1,
+                    position_count = 0,
+                    positions = null
+                """,
                 [BitMap()],
             )
+
+            self.db.execute(
+                "replace into settings values('position_window_size', ?)",
+                [position_window_size],
+            )
+
+            # Also reset the positions table.
+            self.db.execute("delete from main.position_doc")
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -457,11 +476,55 @@ class Index:
             detach = True
 
             self.db.execute(
-                "create index tempindex.field_value on inverted_index_segment(field, value)"
+                """
+                create index tempindex.field_value on inverted_index_segment(
+                    field, value, first_doc_id
+                )
+                """
             )
 
-            query = """
-                replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
+            # Calculate shift values for the positional information
+            self.db.execute(
+                """
+                create table tempindex.position_shift (
+                    field,
+                    first_doc_id,
+                    position_shift,
+                    primary key (field, first_doc_id)
+                )
+                """
+            )
+
+            ordered_positions = self.db.execute(
+                """
+                select
+                    field,
+                    first_doc_id,
+                    last_doc_position
+                from batch_position
+                order by field, first_doc_id
+                """
+            )
+
+            position_offsets = collections.defaultdict(list)
+
+            for field, first_doc_id, last_position in ordered_positions:
+                position_offsets[field].append((first_doc_id, last_position))
+
+            for field, positions_info in position_offsets.items():
+                next_position_shift = 0
+
+                for doc_id, last_position in positions_info:
+                    self.db.execute(
+                        "insert into position_shift values(?, ?, ?)",
+                        (field, doc_id, next_position_shift),
+                    )
+                    next_position_shift += last_position
+
+            # Actually populate the new values
+            self.db.execute(
+                """
+                replace into inverted_index(feature_id, field, value, docs_count, doc_ids, position_count, positions)
                     select
                         (
                             select feature_id
@@ -471,13 +534,49 @@ class Index:
                         field,
                         value,
                         sum(docs_count) as docs_count,
-                        roaring_union(doc_ids) as doc_ids
+                        roaring_union(doc_ids) as doc_ids,
+                        sum(position_count) as position_count,
+                        roaring_shift_union(positions, position_shift) as positions
                     from inverted_index_segment iis
+                    left outer join tempindex.position_shift using(field, first_doc_id)
                     group by field, value
                 """
+            )
 
-            # Actually populate the new values
-            self.db.execute(query)
+            # Map flat positions to document ids by unrolling everything to
+            # rows for lookups
+            position_doc_map = self.db.execute(
+                """
+                select
+                    field,
+                    doc_ids,
+                    doc_position_starts,
+                    position_shift
+                from batch_position
+                inner join position_shift using(field, first_doc_id)
+                order by field, first_doc_id
+                """
+            )
+
+            for (
+                field,
+                doc_ids,
+                doc_position_starts,
+                shift,
+            ) in position_doc_map:
+                for doc_id, global_start_pos, start_pos, end_pos in zip(
+                    doc_ids,
+                    # The actual global positions
+                    doc_position_starts.shift(shift),
+                    # The offsets for position lengths of this
+                    # document.
+                    doc_position_starts,
+                    doc_position_starts[1:],
+                ):
+                    self.db.execute(
+                        "insert into position_doc values(?, ?, ?, ?)",
+                        (field, global_start_pos, end_pos - start_pos, doc_id),
+                    )
 
             # Update docs_counts in the clusters
             self.db.execute(
@@ -489,31 +588,6 @@ class Index:
                         where ii.feature_id = feature_cluster.feature_id
                     )
                 """
-            )
-
-            self.db.execute("DELETE from skipgram_count")
-
-            self.db.execute(
-                """
-                insert into skipgram_count
-                    select
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (sc.field, sc.value_a)
-                        ),
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (sc.field, sc.value_b)
-                        ),
-                        distance,
-                        sum(docs_count) as total_docs
-                    from tempindex.skipgram_count sc
-                    group by field, value_a, value_b, distance
-                    having total_docs >= ?
-                """,
-                [skipgram_min_docs],
             )
 
             # Write the field summary
@@ -556,6 +630,7 @@ class Index:
 
             tempdir.cleanup()
 
+        self.position_window_size = position_window_size
         self.logger.info("Indexing completed.")
 
     @atomic()
@@ -570,11 +645,98 @@ class Index:
             )[0][0]
             yield doc_key
 
+    @atomic()
+    def convert_positions_to_query(self, field, positions):
+        """
+        Convert a bitset of positions in a field into a set of doc_ids.
+
+        """
+        pass
+
+    @atomic()
+    def convert_query_to_field_positions(self, field, query):
+        """
+        Convert a set of doc_ids into positions for a specific field.
+
+        """
+        pass
+
     @requires_corpus(corpus.BaseCorpus)
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
         return self.corpus.docs(doc_keys=keys)
+
+    @requires_corpus(corpus.BaseCorpus)
+    @atomic()
+    def cooccurrence(self, field, positions, proximity_window, random_sample_size=None):
+        """
+        Retrieve concordance matching the given position set.
+
+        Optionally sample positions before using concordances.
+
+        Note that this assumes documents have not changed, as the documents
+        are reindexed to retrieve positions.
+
+        """
+        if random_sample_size is not None:
+            positions = self.sample_bitmap(positions, random_sample_size)
+
+        current_doc_end = -1
+        current_token_positions = None
+
+        for position in positions:
+            if position < current_doc_end:
+                # Still on the same document
+                pass
+
+            else:
+                # Retrieve a new document
+                doc_start_position, field_size, doc_id = list(
+                    self.db.execute(
+                        """
+                        select
+                            -- SQLite guarantees the other two
+                            -- columns are from the same row
+                            -- retrieved by max.
+                            max(position_start),
+                            position_count,
+                            doc_id from position_doc
+                        where position_start <= ? and field = ?
+                        """,
+                        [position, field],
+                    )
+                )[0]
+                doc_key, doc = list(self.docs([doc_id]))[0]
+                indexed_field = self.corpus.index(doc)[field]
+                current_token_positions = list(
+                    utilities.approximate_positions_with_sentinels(
+                        indexed_field, self.position_window_size
+                    )
+                )
+                current_doc_end = doc_start_position + field_size
+
+            doc_position = position - doc_start_position
+            cooccurrence_window = [
+                token
+                for pos, token in current_token_positions
+                if (doc_position - proximity_window)
+                <= pos
+                <= (doc_position + proximity_window)
+            ]
+
+            yield (doc_key, doc_id, cooccurrence_window)
+
+    def concordances(self, field, positions, position_windows, random_sample_size=None):
+        """
+        A utility function that wraps the cooccurrence function to produce
+        text strings instead.
+
+        """
+        for doc_key, doc_id, cooccurrence_window in self.cooccurrence(
+            field, positions, position_windows, random_sample_size=random_sample_size
+        ):
+            yield doc_key, doc_id, " ".join(cooccurrence_window)
 
     def sample_bitmap(self, bitmap, random_sample_size):
         """
@@ -705,7 +867,9 @@ class Index:
             writer.writeheader()
 
             for cluster_id, sample_docs in sample_docs.items():
-                write_docs = self.docs(sample_docs)
+                write_docs = self.corpus.render_docs_table(
+                    self.convert_query_to_keys(sample_docs)
+                )
 
                 for doc_id, (key, doc) in zip(sample_docs, write_docs):
                     doc["doc_key"] = key
@@ -714,7 +878,7 @@ class Index:
                         if doc_id in cluster_docs:
                             doc[f"cluster_{other_cluster_id}"] = 1
 
-                writer.writerow(doc)
+                    writer.writerow(doc)
 
     def indexed_field_summary(self):
         """
@@ -1132,9 +1296,6 @@ class Index:
             against moving into this cluster. Note that features will
             be removed from this set if they are already in this cluster
             in cluster_feature.
-
-        acceptance_probability is a softening factor, used to prevent
-        cycling between the same states on repeated iteration.
 
         top_k: the number of best scores to keep - the default is to only
             the single best scoring feature.
@@ -1804,43 +1965,69 @@ class Index:
 
 
 def _index_docs(
-    corpus, doc_ids, doc_keys, temp_db_path, skipgram_window_size, write_lock
+    corpus, doc_ids, doc_keys, temp_db_path, position_window_size, write_lock
 ):
-    """Index all of the given docs into temp_db_path."""
+    """
+    Index all of the given docs into temp_db_path.
+
+    position_window_size has two modes:
+
+    0 - disabled, no position information will be recorded.
+    > 0 - approximate position windows of the given half width will be
+      created. Coocurrence of values can be found exactly up to 2 *
+      position_window_size - note that edge effects mean that the position
+      windows will miss cooccurence across window boundaries which is why the
+      limit is 2*position_window_size not position_window_size. Note that
+      setting this to 1 computes an exact position index.
+
+    """
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
-        # This is {field: {value: doc_ids, value2: doc_ids}}
-        batch = collections.defaultdict(lambda: collections.defaultdict(BitMap))
-        # The structure is (distance, field, value_a, value_b: count)
-        skipgram_counts = [
-            collections.defaultdict(
-                lambda: collections.defaultdict(collections.Counter)
-            )
-            for _ in range(skipgram_window_size)
-        ]
+        if len(doc_ids) != len(doc_keys):
+            raise ValueError("There must be exactly one doc_id for every doc_key.")
+
+        # Mapping of {field: {value: (BitMap(), BitMap())}}
+        # One bitmap for document occurrence, the other other for recording
+        # positional information.
+        batch = collections.defaultdict(
+            lambda: collections.defaultdict(lambda: (BitMap(), BitMap()))
+        )
+
+        # Mapping of fields -> position ends for each document.
+        field_doc_position = collections.defaultdict(lambda: BitMap([0]))
 
         docs = corpus.docs(doc_keys=doc_keys)
 
         for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
+
             for field, values in features.items():
-                # Only find bigrams in sequences - non sequence types such as
-                # a set don't make sense to do this.
-                if skipgram_window_size > 0 and isinstance(
+                # Only record position information if there is a
+                # position_window_size set, and the field is an ordered
+                # sequence type.
+                if position_window_size and isinstance(
                     values, collections.abc.Sequence
                 ):
-                    bigrams = utilities.long_distance_bigrams(
-                        values, skipgram_window_size
+                    batch_position = field_doc_position[field][-1]
+
+                    position_values = utilities.approximate_positions_with_sentinels(
+                        values, position_window_size
                     )
-                    for item_a, item_b, distance in bigrams:
-                        skipgram_counts[distance - 1][field][item_a][item_b] += 1
+
+                    for position, value in position_values:
+                        batch[field][value][1].add(position + batch_position)
+
+                    # Record offset for the start of the next positions in this
+                    # field for this batch.
+                    field_doc_position[field].add(position + batch_position + 1)
 
                 set_values = set(values)
+                set_values.discard(None)
 
                 for value in set_values:
-                    batch[field][value].add(doc_id)
+                    batch[field][value][0].add(doc_id)
 
         with write_lock:
             local_db.execute("pragma synchronous=0")
@@ -1851,10 +2038,38 @@ def _index_docs(
                     field text,
                     value,
                     docs_count,
-                    doc_ids roaring_bitmap
+                    doc_ids roaring_bitmap,
+                    position_count,
+                    positions roaring_bitmap,
+                    first_doc_id
                 )
                 """
             )
+
+            local_db.execute(
+                """
+                CREATE table if not exists batch_position(
+                    field,
+                    first_doc_id,
+                    doc_ids roaring_bitmap,
+                    doc_position_starts roaring_bitmap,
+                    last_doc_position,
+                    primary key (field, first_doc_id)
+                )
+                """
+            )
+
+            for field, position_starts in field_doc_position.items():
+                local_db.execute(
+                    "insert into batch_position values(?, ?, ?, ?, ?)",
+                    (
+                        field,
+                        doc_ids[0],
+                        doc_ids,
+                        position_starts,
+                        position_starts[-1],
+                    ),
+                )
 
             # Ensure we do all the inserts in sorted order as far as possible
             field_order = sorted(batch.keys())
@@ -1864,43 +2079,20 @@ def _index_docs(
                 value_order = sorted(v for v in values if v is not None)
 
                 local_db.executemany(
-                    "insert into inverted_index_segment values(?, ?, ?, ?)",
+                    "insert into inverted_index_segment values(?, ?, ?, ?, ?, ?, ?)",
                     (
-                        (field, value, len(values[value]), values[value])
+                        (
+                            field,
+                            value,
+                            len(values[value][0]),
+                            values[value][0],
+                            len(values[value][1]),
+                            values[value][1] or None,
+                            doc_ids[0],
+                        )
                         for value in value_order
                     ),
                 )
-
-            local_db.execute(
-                """
-                CREATE table if not exists skipgram_count(
-                    field text,
-                    value_a,
-                    value_b,
-                    distance integer,
-                    docs_count integer
-                )
-                """
-            )
-
-            # TODO: The data structure for this has the wrong layout to be
-            # able to work nicely in sorted order.
-            for i, f in enumerate(skipgram_counts):
-                distance = i + 1
-                for field in field_order:
-                    item_as = f[field]
-                    a_order = sorted(item_as.keys())
-
-                    for item_a in a_order:
-                        item_bs = item_as[item_a]
-
-                        local_db.executemany(
-                            "INSERT into skipgram_count values(?, ?, ?, ?, ?)",
-                            (
-                                (field, item_a, item_b, distance, c)
-                                for item_b, c in sorted(item_bs.items())
-                            ),
-                        )
 
             local_db.execute("commit")
 

@@ -23,7 +23,7 @@ import hyperreal
 @pytest.fixture(scope="module")
 def pool():
     context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=context) as pool:
+    with cf.ProcessPoolExecutor(2, mp_context=context) as pool:
         yield pool
 
 
@@ -51,12 +51,16 @@ def check_alice():
         docs = (line[0] for line in csv.reader(f) if line and line[0].strip())
         target_nnz = 0
         target_docs = 0
+        target_positions = 0
         for d in docs:
             target_docs += 1
             # Note, exclude the None sentinel at the end.
             target_nnz += len(set(hyperreal.utilities.tokens(d)[:-1]))
+            target_positions += sum(
+                1 for v in hyperreal.utilities.tokens(d) if v is not None
+            )
 
-    return target_docs, target_nnz
+    return target_docs, target_nnz, target_positions
 
 
 corpora_test_cases = [
@@ -73,34 +77,80 @@ corpora_test_cases = [
 def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     """Test that all builtin corpora can be successfully indexed and queried."""
     c = corpus(*args, **kwargs)
-    i = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c, pool=pool)
+    idx = hyperreal.index.Index(tmp_path / corpus.CORPUS_TYPE, c, pool=pool)
 
     # These are actually very bad settings, but necessary for checking
     # all code paths and concurrency.
-    i.index(doc_batch_size=10)
+    idx.index(doc_batch_size=10)
 
     # Compare against the actual test data.
-    target_docs, target_nnz = check_stats()
+    target_docs, target_nnz, target_positions = check_stats()
 
-    nnz = list(i.db.execute("select sum(docs_count) from inverted_index"))[0][0]
-    total_docs = list(i.db.execute("select count(*) from doc_key"))[0][0]
+    nnz = list(idx.db.execute("select sum(docs_count) from inverted_index"))[0][0]
+    total_docs = list(idx.db.execute("select count(*) from doc_key"))[0][0]
     assert total_docs == target_docs
     assert nnz == target_nnz
 
     # Feature ids should remain the same across indexing runs
     features_field_values = {
         feature_id: (field, value)
-        for feature_id, field, value in i.db.execute(
+        for feature_id, field, value in idx.db.execute(
             "select feature_id, field, value from inverted_index"
         )
     }
 
-    i.index(doc_batch_size=10)
+    idx.index(doc_batch_size=10)
 
-    for feature_id, field, value in i.db.execute(
+    for feature_id, field, value in idx.db.execute(
         "select feature_id, field, value from inverted_index"
     ):
         assert (field, value) == features_field_values[feature_id]
+
+    for p in [1, 5, 10]:
+        idx.index(doc_batch_size=1, position_window_size=p)
+
+        positions = list(
+            idx.db.execute("select sum(position_count) from inverted_index")
+        )[0][0]
+
+        if p == 1:
+            assert positions == target_positions
+
+        # Make sure that there's information for every document with
+        # positional information.
+        assert not list(
+            idx.db.execute(
+                """
+                select 1
+                from doc_key
+                where doc_id not in (
+                    select doc_id
+                    from position_doc
+                )
+                """
+            )
+        )
+
+        # Test concordances:
+        positions = list(
+            idx.db.execute(
+                """
+                select
+                    positions
+                from inverted_index
+                where field='text' and value = 'hatter'
+                """
+            )
+        )[0][0]
+
+        for doc_key, doc_id, cooccurrence_window in idx.cooccurrence(
+            "text", positions, 1, 5
+        ):
+            assert "hatter" in cooccurrence_window
+            assert len(cooccurrence_window) <= 3 * p
+
+        for doc_key, doc_id, concordance in idx.concordances("text", positions, 1, 5):
+            assert "hatter" in concordance
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
@@ -466,3 +516,17 @@ def test_graph_creation(example_index_path, pool):
     graph = idx.create_cluster_cooccurrence_graph(top_k=5)
 
     assert len(graph.nodes) == 32
+
+
+def test_indexing_utility(example_index_corpora_path, tmp_path, pool):
+    """Test the indexing utility function."""
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+
+    temp_index = tmp_path / "tempindex.db"
+
+    doc_keys = BitMap(range(1, 100))
+    doc_ids = doc_keys
+
+    hyperreal.index._index_docs(
+        corpus, doc_keys, doc_ids, str(temp_index), 1, mp.Lock()
+    )

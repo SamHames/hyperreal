@@ -696,13 +696,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             )
         )[0]
 
-        tags = [
+        tags = {
             r["Tag"]
             for r in self.db.execute(
                 "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
                 base_fields,
             )
-        ]
+        }
 
         user_comments = list(
             self.db.execute(
@@ -813,7 +813,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             # Don't bother indexing at minute/hour granularity - just day/month/year
             if granularity in ("minute", "hour"):
                 continue
-            indexed[f"created_{granularity}"] = [dt.isoformat()]
+            indexed[f"created_{granularity}"] = set([dt.isoformat()])
 
         return indexed
 

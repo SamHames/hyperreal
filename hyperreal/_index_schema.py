@@ -14,9 +14,19 @@ database, associated with CURRENT_SCHEMA_VERSION.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 CURRENT_SCHEMA = f"""
+    create table if not exists settings (
+        key primary key,
+        value
+    );
+
+    --------
+    -- Migrated indexes will have no position information.
+    replace into settings values('position_window_size', 0);
+
+    --------
     create table if not exists doc_key (
         doc_id integer primary key,
         doc_key unique
@@ -29,7 +39,28 @@ CURRENT_SCHEMA = f"""
         value not null,
         docs_count integer not null,
         doc_ids roaring_bitmap not null,
+        position_count integer,
+        positions roaring_bitmap,
         unique (field, value)
+    );
+
+    --------
+    create table if not exists position_doc (
+        field,
+        position_start,
+        position_count integer,
+        doc_id integer references doc_key(doc_id) on delete cascade,
+        primary key (field, position_start)
+    ) without rowid;
+
+    --------
+    create index if not exists doc_position on position_doc(
+        doc_id,
+        field,
+        position_start,
+        -- Note we materialise this column so this can
+        -- always be used as a covering index.
+        position_count
     );
 
     --------
@@ -161,6 +192,13 @@ migrations = {
         [
             "alter table cluster add column pinned bool default 0",
             "alter table feature_cluster add column pinned bool default 0",
+        ],
+        [],
+    ),
+    8: (
+        [
+            "alter table inverted_index add column position_count integer",
+            "alter table inverted_index add column positions roaring_bitmap",
         ],
         [],
     ),
