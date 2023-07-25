@@ -796,7 +796,9 @@ class Index:
             writer.writeheader()
 
             for cluster_id, sample_docs in sample_docs.items():
-                write_docs = self.docs(sample_docs)
+                write_docs = self.corpus.render_docs_table(
+                    self.convert_query_to_keys(sample_docs)
+                )
 
                 for doc_id, (key, doc) in zip(sample_docs, write_docs):
                     doc["doc_key"] = key
@@ -805,7 +807,7 @@ class Index:
                         if doc_id in cluster_docs:
                             doc[f"cluster_{other_cluster_id}"] = 1
 
-                writer.writerow(doc)
+                    writer.writerow(doc)
 
     def indexed_field_summary(self):
         """
@@ -1223,9 +1225,6 @@ class Index:
             against moving into this cluster. Note that features will
             be removed from this set if they are already in this cluster
             in cluster_feature.
-
-        acceptance_probability is a softening factor, used to prevent
-        cycling between the same states on repeated iteration.
 
         top_k: the number of best scores to keep - the default is to only
             the single best scoring feature.
