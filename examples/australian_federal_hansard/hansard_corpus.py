@@ -76,11 +76,11 @@ class HansardCorpus(SqliteBackedCorpus):
                         """
                         select
                             speech.speech_id,
-                            speech,
                             date,
                             house,
                             debate.title as debate_title,
-                            subdebate.title as subdebate_title
+                            subdebate.title as subdebate_title,
+                            speech
                         from speech
                         left outer join session using (date, house)
                         left outer join debate using (date, house, debate_no)
@@ -103,10 +103,7 @@ class HansardCorpus(SqliteBackedCorpus):
             # Special case 1 - stray closing >
             root = ElementTree.fromstring(doc["speech"].replace(b"&gt;\n", b""))
 
-        speech_tokens = []
-        for element in root.iter():
-            speech_tokens.extend(tokens(element.text or ""))
-            speech_tokens.append(None)
+        speech_tokens = tokens(" ".join(root.itertext()))
 
         return {"speech": speech_tokens}
 
@@ -144,7 +141,16 @@ class HansardCorpus(SqliteBackedCorpus):
     def render_docs_table(self, doc_keys):
         """Return the given documents as HTML."""
 
-        return list(self.docs(doc_keys=doc_keys))
+        docs = self.docs(doc_keys=doc_keys)
+
+        out_docs = []
+        for key, doc in docs:
+            speech = ElementTree.fromstring(doc["speech"])
+            ElementTree.indent(speech)
+            doc["speech"] = ElementTree.tostring(speech, encoding="unicode")
+            out_docs.append((key, doc))
+
+        return out_docs
 
     def keys(self):
         """The speeches are the central document."""
@@ -445,7 +451,9 @@ def process_xml_historic(xml_data, source_file):
                     subdebate_seq,
                     speech_seq,
                     speech_data.tag,
-                    ElementTree.tostring(speech_data),
+                    ElementTree.tostring(
+                        speech_data,
+                    ),
                 )
                 rows["speech"].append(speech)
 
@@ -626,6 +634,8 @@ if __name__ == "__main__":
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
         idx = Index("test_index.db", corpus=corpus, pool=pool)
         idx.index(position_window_size=5, doc_batch_size=10000)
+        idx.initialise_clusters(n_clusters=256, min_docs=10, include_fields=["speech"])
+        idx.refine_clusters(iterations=50)
 
         index_server = hyperreal.server.SingleIndexServer(
             "test_index.db",
