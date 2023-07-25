@@ -667,6 +667,77 @@ class Index:
         keys = self.convert_query_to_keys(query)
         return self.corpus.docs(doc_keys=keys)
 
+    @requires_corpus(corpus.BaseCorpus)
+    @atomic()
+    def cooccurrence(self, field, positions, proximity_window, random_sample_size=None):
+        """
+        Retrieve concordance matching the given position set.
+
+        Optionally sample positions before using concordances.
+
+        Note that this assumes documents have not changed, as the documents
+        are reindexed to retrieve positions.
+
+        """
+        if random_sample_size is not None:
+            positions = self.sample_bitmap(positions, random_sample_size)
+
+        current_doc_end = -1
+        current_token_positions = None
+
+        for position in positions:
+            if position < current_doc_end:
+                # Still on the same document
+                pass
+
+            else:
+                # Retrieve a new document
+                doc_start_position, field_size, doc_id = list(
+                    self.db.execute(
+                        """
+                        select
+                            -- SQLite guarantees the other two
+                            -- columns are from the same row
+                            -- retrieved by max.
+                            max(position_start),
+                            position_count,
+                            doc_id from position_doc
+                        where position_start <= ? and field = ?
+                        """,
+                        [position, field],
+                    )
+                )[0]
+                doc_key, doc = list(self.docs([doc_id]))[0]
+                indexed_field = self.corpus.index(doc)[field]
+                current_token_positions = list(
+                    utilities.approximate_positions_with_sentinels(
+                        indexed_field, self.position_window_size
+                    )
+                )
+                current_doc_end = doc_start_position + field_size
+
+            doc_position = position - doc_start_position
+            cooccurrence_window = [
+                token
+                for pos, token in current_token_positions
+                if (doc_position - proximity_window)
+                <= pos
+                <= (doc_position + proximity_window)
+            ]
+
+            yield (doc_key, doc_id, cooccurrence_window)
+
+    def concordances(self, field, positions, position_windows, random_sample_size=None):
+        """
+        A utility function that wraps the cooccurrence function to produce
+        text strings instead.
+
+        """
+        for doc_key, doc_id, cooccurrence_window in self.cooccurrence(
+            field, positions, position_windows, random_sample_size=random_sample_size
+        ):
+            yield doc_key, doc_id, " ".join(cooccurrence_window)
+
     def sample_bitmap(self, bitmap, random_sample_size):
         """
         Sample up to random_sample_size members from bitmap.

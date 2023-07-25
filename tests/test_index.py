@@ -131,6 +131,27 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
             )
         )
 
+        # Test concordances:
+        positions = list(
+            idx.db.execute(
+                """
+                select
+                    positions
+                from inverted_index
+                where field='text' and value = 'hatter'
+                """
+            )
+        )[0][0]
+
+        for doc_key, doc_id, cooccurrence_window in idx.cooccurrence(
+            "text", positions, 1, 5
+        ):
+            assert "hatter" in cooccurrence_window
+            assert len(cooccurrence_window) <= 3 * p
+
+        for doc_key, doc_id, concordance in idx.concordances("text", positions, 1, 5):
+            assert "hatter" in concordance
+
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
 def test_model_creation(pool, example_index_path, n_clusters):
