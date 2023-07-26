@@ -387,7 +387,7 @@ class Index:
             # sequentially
             doc_keys = enumerate(self.corpus.keys())
 
-            batch_doc_ids = BitMap()
+            batch_doc_ids = []
             batch_doc_keys = []
             batch_size = 0
 
@@ -397,7 +397,7 @@ class Index:
 
             for doc_key in doc_keys:
                 self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                batch_doc_ids.add(doc_key[0])
+                batch_doc_ids.append(doc_key[0])
                 batch_doc_keys.append(doc_key[1])
                 batch_size += 1
 
@@ -416,7 +416,7 @@ class Index:
                             write_lock,
                         )
                     )
-                    batch_doc_ids = BitMap()
+                    batch_doc_ids = []
                     batch_doc_keys = []
                     batch_size = 0
 
@@ -560,14 +560,14 @@ class Index:
 
             for (
                 field,
-                doc_ids,
-                doc_position_starts,
+                doc_array,
+                doc_positions_array,
                 shift,
             ) in position_doc_map:
-                for doc_id, global_start_pos, start_pos, end_pos in zip(
+                doc_ids = array.array("I", doc_array)
+                doc_position_starts = array.array("I", doc_positions_array)
+                for doc_id, start_pos, end_pos in zip(
                     doc_ids,
-                    # The actual global positions
-                    doc_position_starts.shift(shift),
                     # The offsets for position lengths of this
                     # document.
                     doc_position_starts,
@@ -575,7 +575,7 @@ class Index:
                 ):
                     self.db.execute(
                         "insert into position_doc values(?, ?, ?, ?)",
-                        (field, global_start_pos, end_pos - start_pos, doc_id),
+                        (field, start_pos + shift, end_pos - start_pos, doc_id),
                     )
 
             # Update docs_counts in the clusters
@@ -703,6 +703,9 @@ class Index:
                             position_count,
                             doc_id from position_doc
                         where position_start <= ? and field = ?
+                            -- A document with no positions in this
+                            -- field can never match.
+                            and position_count > 0
                         """,
                         [position, field],
                     )
@@ -1996,7 +1999,7 @@ def _index_docs(
         )
 
         # Mapping of fields -> position ends for each document.
-        field_doc_position = collections.defaultdict(lambda: BitMap([0]))
+        field_doc_position = collections.defaultdict(lambda: ([0], []))
 
         docs = corpus.docs(doc_keys=doc_keys)
 
@@ -2010,7 +2013,12 @@ def _index_docs(
                 if position_window_size and isinstance(
                     values, collections.abc.Sequence
                 ):
-                    batch_position = field_doc_position[field][-1]
+                    batch_position = field_doc_position[field][0][-1]
+                    field_doc_position[field][1].append(doc_id)
+
+                    # Make sure this is initilaised - values can be non-empty
+                    # but only contain sentinels that generate no positions.
+                    position = None
 
                     position_values = utilities.approximate_positions_with_sentinels(
                         values, position_window_size
@@ -2021,7 +2029,12 @@ def _index_docs(
 
                     # Record offset for the start of the next positions in this
                     # field for this batch.
-                    field_doc_position[field].add(position + batch_position + 1)
+                    if position is None:
+                        next_position_start = batch_position
+                    else:
+                        next_position_start = position + batch_position + 1
+
+                    field_doc_position[field][0].append(next_position_start)
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -2051,22 +2064,22 @@ def _index_docs(
                 CREATE table if not exists batch_position(
                     field,
                     first_doc_id,
-                    doc_ids roaring_bitmap,
-                    doc_position_starts roaring_bitmap,
+                    doc_ids blob,
+                    doc_position_starts blob,
                     last_doc_position,
                     primary key (field, first_doc_id)
                 )
                 """
             )
 
-            for field, position_starts in field_doc_position.items():
+            for field, (position_starts, doc_ids) in field_doc_position.items():
                 local_db.execute(
                     "insert into batch_position values(?, ?, ?, ?, ?)",
                     (
                         field,
                         doc_ids[0],
-                        doc_ids,
-                        position_starts,
+                        array.array("I", doc_ids),
+                        array.array("I", position_starts),
                         position_starts[-1],
                     ),
                 )

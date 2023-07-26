@@ -50,7 +50,7 @@ CURRENT_SCHEMA = f"""
         position_start,
         position_count integer,
         doc_id integer references doc_key(doc_id) on delete cascade,
-        primary key (field, position_start)
+        primary key (field, position_start, doc_id)
     ) without rowid;
 
     --------
