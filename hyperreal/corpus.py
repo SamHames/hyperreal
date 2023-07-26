@@ -21,6 +21,7 @@ from typing import Protocol, Sequence, runtime_checkable, Any
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 
+from lxml.html import fragment_fromstring
 from dateutil.parser import isoparse
 from jinja2 import Template
 from markupsafe import Markup
@@ -229,69 +230,6 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         return [
             (key, {"text": doc["text"]}) for key, doc in self.docs(doc_keys=doc_keys)
         ]
-
-
-class StackExchangeHTMLLines(HTMLParser):
-    """
-    Parser for extracting the text and code blocks from StackOverflow Posts.
-
-    It's likely that this misses many edge cases.
-
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.reset()
-        self.strict = False
-        self.convert_charrefs = True
-        self.data_lines = {"body": [None], "code_block": [None]}
-        self.open_tags = set()
-        self.code_blocks = set(["code", "pre"])
-        self.lastdata = None
-
-    def handle_starttag(self, tag, attrs):
-        self.open_tags.add(tag)
-
-    def handle_endtag(self, tag):
-        self.open_tags.discard(tag)
-
-    def handle_data(self, d):
-        if len(self.open_tags & self.code_blocks) == 2:
-            self.data_lines["code_block"].append(d)
-
-            # If we're switching from code to body and back, make sure there's
-            # a sentinel value to prevent finding collocations across the
-            # boundary.
-            if self.lastdata != "code_block":
-                self.data_lines["body"].append(None)
-
-            self.lastdata = "code_block"
-
-        else:
-            self.data_lines["body"].append(d)
-            if self.lastdata != "body":
-                self.data_lines["code_block"].append(None)
-
-            self.lastdata = "body"
-
-    def collapse_lines(self, lines):
-        boundaries = [i for i, line in enumerate(lines) if line is None]
-
-        contiguous = []
-
-        for start, end in zip(boundaries, boundaries[1:]):
-            contiguous.append(" ".join(lines[start + 1 : end]))
-
-        return contiguous
-
-    def __call__(self, html):
-        self.feed(html)
-        self.data_lines["body"].append(None)
-        self.data_lines["code_block"].append(None)
-        self.close()
-        return {
-            key: self.collapse_lines(lines) for key, lines in self.data_lines.items()
-        }
 
 
 class StackExchangeCorpus(SqliteBackedCorpus):
@@ -782,20 +720,30 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
     def index(self, doc):
-        parse = StackExchangeHTMLLines()
-        body_data = parse(doc["Body"] or "")
+        code_blocks = []
+
+        if doc["Body"]:
+            body_html = fragment_fromstring(doc["Body"], create_parent="div")
+
+            for node in body_html.xpath("pre/code"):
+                # Extract text of code blocks
+                code_blocks.append(" ".join(node.itertext()))
+                # Then remove them, treat everything else as post text
+                node.getparent().remove(node)
+
+            # This is a little wrong, ideally we'd handle the cases where
+            # the code blocks are removed with a sentinel...
+            post_text = " ".join(body_html.itertext())
+
+        else:
+            post_text = ""
 
         indexed = {
             "UserPosting": set([doc["DisplayName"]]),
-            # Note tokenise different components separately, so there are
-            # sentinels included for long distance bigrams.
             "Post": utilities.tokens((doc["Title"] or ""))
-            + [t for line in body_data["body"] for t in utilities.tokens(line) if line],
+            + utilities.tokens(post_text),
             "CodeBlock": [
-                t
-                for line in body_data["code_block"]
-                for t in utilities.tokens(line)
-                if line
+                t for line in code_blocks for t in utilities.tokens(line) if line
             ],
             "Tag": doc["Tags"],
             # Comments from deleted users remain, but have no UserId associated.
