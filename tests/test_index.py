@@ -110,7 +110,7 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
         idx.index(doc_batch_size=1, position_window_size=p)
 
         positions = list(
-            idx.db.execute("select sum(position_count) from inverted_index")
+            idx.db.execute("select sum(position_count) from position_index")
         )[0][0]
 
         if p == 1:
@@ -118,39 +118,27 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
 
         # Make sure that there's information for every document with
         # positional information.
-        assert not list(
-            idx.db.execute(
-                """
-                select 1
-                from doc_key
-                where doc_id not in (
-                    select doc_id
-                    from position_doc
-                )
-                """
-            )
+        assert (
+            target_docs
+            == list(idx.db.execute("select sum(docs_count) from position_doc_map"))[0][
+                0
+            ]
         )
 
-        # Test concordances:
-        positions = list(
-            idx.db.execute(
-                """
-                select
-                    positions
-                from inverted_index
-                where field='text' and value = 'hatter'
-                """
-            )
-        )[0][0]
-
-        for doc_key, doc_id, cooccurrence_window in idx.cooccurrence(
-            "text", positions, 1, 5
+        # Test window extraction from documents.
+        for doc_key, doc_id, cooccurrence_windows in idx.extract_matching_windows(
+            idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
         ):
-            assert "hatter" in cooccurrence_window
-            assert len(cooccurrence_window) <= 3 * p
+            for match, window in cooccurrence_windows["text"]:
+                assert match in ["mad", "hatter"]
+                assert "hatter" in window or "mad" in window
+                assert len(window) <= 21
 
-        for doc_key, doc_id, concordance in idx.concordances("text", positions, 1, 5):
-            assert "hatter" in concordance
+        for doc_key, doc_id, concordances in idx.concordances(
+            idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
+        ):
+            for concordance in concordances["text"]:
+                assert "mad" in concordance or "hatter" in concordance
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])

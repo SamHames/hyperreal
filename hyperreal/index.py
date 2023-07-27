@@ -449,20 +449,19 @@ class Index:
                 """
                 update inverted_index set
                     docs_count = 0,
-                    doc_ids = ?1,
-                    position_count = 0,
-                    positions = null
+                    doc_ids = ?1
                 """,
                 [BitMap()],
             )
+
+            # Zero out positional information
+            self.db.execute("delete from position_doc_map")
+            self.db.execute("delete from position_index")
 
             self.db.execute(
                 "replace into settings values('position_window_size', ?)",
                 [position_window_size],
             )
-
-            # Also reset the positions table.
-            self.db.execute("delete from main.position_doc")
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -483,48 +482,10 @@ class Index:
                 """
             )
 
-            # Calculate shift values for the positional information
+            # Actually populate the new values - inverted index
             self.db.execute(
                 """
-                create table tempindex.position_shift (
-                    field,
-                    first_doc_id,
-                    position_shift,
-                    primary key (field, first_doc_id)
-                )
-                """
-            )
-
-            ordered_positions = self.db.execute(
-                """
-                select
-                    field,
-                    first_doc_id,
-                    last_doc_position
-                from batch_position
-                order by field, first_doc_id
-                """
-            )
-
-            position_offsets = collections.defaultdict(list)
-
-            for field, first_doc_id, last_position in ordered_positions:
-                position_offsets[field].append((first_doc_id, last_position))
-
-            for field, positions_info in position_offsets.items():
-                next_position_shift = 0
-
-                for doc_id, last_position in positions_info:
-                    self.db.execute(
-                        "insert into position_shift values(?, ?, ?)",
-                        (field, doc_id, next_position_shift),
-                    )
-                    next_position_shift += last_position
-
-            # Actually populate the new values
-            self.db.execute(
-                """
-                replace into inverted_index(feature_id, field, value, docs_count, doc_ids, position_count, positions)
+                replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
                     select
                         (
                             select feature_id
@@ -534,49 +495,37 @@ class Index:
                         field,
                         value,
                         sum(docs_count) as docs_count,
-                        roaring_union(doc_ids) as doc_ids,
-                        sum(position_count) as position_count,
-                        roaring_shift_union(positions, position_shift) as positions
+                        roaring_union(doc_ids) as doc_ids
                     from inverted_index_segment iis
-                    left outer join tempindex.position_shift using(field, first_doc_id)
                     group by field, value
                 """
             )
 
-            # Map flat positions to document ids by unrolling everything to
-            # rows for lookups
-            position_doc_map = self.db.execute(
+            # Position index
+            self.db.execute(
                 """
-                select
-                    field,
-                    doc_ids,
-                    doc_position_starts,
-                    position_shift
-                from batch_position
-                inner join position_shift using(field, first_doc_id)
-                order by field, first_doc_id
+                insert into position_index(feature_id, first_doc_id, position_count, positions)
+                    select
+                        (
+                            select feature_id
+                            from inverted_index ii
+                            where (ii.field, ii.value) = (iis.field, iis.value)
+                        ),
+                        first_doc_id,
+                        position_count,
+                        positions
+                    from inverted_index_segment iis
+                    where position_count > 0
                 """
             )
 
-            for (
-                field,
-                doc_array,
-                doc_positions_array,
-                shift,
-            ) in position_doc_map:
-                doc_ids = array.array("I", doc_array)
-                doc_position_starts = array.array("I", doc_positions_array)
-                for doc_id, start_pos, end_pos in zip(
-                    doc_ids,
-                    # The offsets for position lengths of this
-                    # document.
-                    doc_position_starts,
-                    doc_position_starts[1:],
-                ):
-                    self.db.execute(
-                        "insert into position_doc values(?, ?, ?, ?)",
-                        (field, start_pos + shift, end_pos - start_pos, doc_id),
-                    )
+            self.db.execute(
+                """
+                insert into position_doc_map
+                    select *
+                    from batch_position
+                """
+            )
 
             # Update docs_counts in the clusters
             self.db.execute(
@@ -669,77 +618,73 @@ class Index:
 
     @requires_corpus(corpus.BaseCorpus)
     @atomic()
-    def cooccurrence(self, field, positions, proximity_window, random_sample_size=None):
+    def extract_matching_windows(
+        self, query, features, window_size, random_sample_size=None
+    ):
         """
-        Retrieve concordance matching the given position set.
+        Retrieve cooccurrence windows around each matching feature in each of
+        the given documents.
 
-        Optionally sample positions before using concordances.
+        window_size is the number of features to extract either size of a match.
 
-        Note that this assumes documents have not changed, as the documents
-        are reindexed to retrieve positions.
+        See also the concordance function which turns features back into
+        strings.
 
         """
         if random_sample_size is not None:
-            positions = self.sample_bitmap(positions, random_sample_size)
+            query = self.sample_bitmap(query, random_sample_size)
 
-        current_doc_end = -1
-        current_token_positions = None
+        field_features = collections.defaultdict(set)
 
-        for position in positions:
-            if position < current_doc_end:
-                # Still on the same document
-                pass
-
+        for feature in features:
+            if isinstance(feature, int):
+                field, value = self.lookup_feature(feature)
+            elif isinstance(feature, tuple):
+                field, value = feature
             else:
-                # Retrieve a new document
-                doc_start_position, field_size, doc_id = list(
-                    self.db.execute(
-                        """
-                        select
-                            -- SQLite guarantees the other two
-                            -- columns are from the same row
-                            -- retrieved by max.
-                            max(position_start),
-                            position_count,
-                            doc_id from position_doc
-                        where position_start <= ? and field = ?
-                            -- A document with no positions in this
-                            -- field can never match.
-                            and position_count > 0
-                        """,
-                        [position, field],
-                    )
-                )[0]
-                doc_key, doc = list(self.docs([doc_id]))[0]
-                indexed_field = self.corpus.index(doc)[field]
-                current_token_positions = list(
-                    utilities.approximate_positions_with_sentinels(
-                        indexed_field, self.position_window_size
-                    )
+                raise TypeError(
+                    f"Unknown feature type {feature} "
+                    "- try an integer feature ID or a ('field', value) tuple"
                 )
-                current_doc_end = doc_start_position + field_size
 
-            doc_position = position - doc_start_position
-            cooccurrence_window = [
-                token
-                for pos, token in current_token_positions
-                if (doc_position - proximity_window)
-                <= pos
-                <= (doc_position + proximity_window)
-            ]
+            field_features[field].add(value)
 
-            yield (doc_key, doc_id, cooccurrence_window)
+        for doc_id, (doc_key, doc) in zip(query, self.docs(query)):
+            indexed = self.corpus.index(doc)
 
-    def concordances(self, field, positions, position_windows, random_sample_size=None):
+            doc_cooccurrence = dict()
+
+            for field, to_match in field_features.items():
+                cooccurrence = []
+                values = indexed.get(field, [])
+
+                for i, value in enumerate(values):
+                    if value in to_match:
+                        start_window = max(0, i - window_size)
+                        cooccurrence.append(
+                            (value, values[start_window : i + window_size + 1])
+                        )
+
+                doc_cooccurrence[field] = cooccurrence
+
+            yield (doc_key, doc_id, doc_cooccurrence)
+
+    def concordances(self, query, features, window_size, random_sample_size=None):
         """
         A utility function that wraps the cooccurrence function to produce
         text strings instead.
 
         """
-        for doc_key, doc_id, cooccurrence_window in self.cooccurrence(
-            field, positions, position_windows, random_sample_size=random_sample_size
+        for doc_key, doc_id, cooccurrence_windows in self.extract_matching_windows(
+            query, features, window_size, random_sample_size=random_sample_size
         ):
-            yield doc_key, doc_id, " ".join(cooccurrence_window)
+            yield doc_key, doc_id, {
+                field: [
+                    " ".join(w for w in window if w is not None)
+                    for _, window in windows
+                ]
+                for field, windows in cooccurrence_windows.items()
+            }
 
     def sample_bitmap(self, bitmap, random_sample_size):
         """
@@ -1998,10 +1943,14 @@ def _index_docs(
             lambda: collections.defaultdict(lambda: (BitMap(), BitMap()))
         )
 
-        # Mapping of fields -> position ends for each document.
-        field_doc_position = collections.defaultdict(lambda: ([0], []))
+        # Mapping of fields -> position ends for each document. Note that
+        # documents with an empty field present are dropped at this stage.
+        field_doc_position = collections.defaultdict(lambda: (BitMap(), BitMap([0])))
 
         docs = corpus.docs(doc_keys=doc_keys)
+
+        first_doc_id = doc_ids[0]
+        last_doc_id = doc_ids[-1]
 
         for doc_id, (_, doc) in zip(doc_ids, docs):
             features = corpus.index(doc)
@@ -2013,8 +1962,7 @@ def _index_docs(
                 if position_window_size and isinstance(
                     values, collections.abc.Sequence
                 ):
-                    batch_position = field_doc_position[field][0][-1]
-                    field_doc_position[field][1].append(doc_id)
+                    batch_position = field_doc_position[field][1][-1]
 
                     # Make sure this is initilaised - values can be non-empty
                     # but only contain sentinels that generate no positions.
@@ -2030,11 +1978,10 @@ def _index_docs(
                     # Record offset for the start of the next positions in this
                     # field for this batch.
                     if position is None:
-                        next_position_start = batch_position
+                        continue
                     else:
-                        next_position_start = position + batch_position + 1
-
-                    field_doc_position[field][0].append(next_position_start)
+                        field_doc_position[field][0].add(doc_id)
+                        field_doc_position[field][1].add(position + batch_position + 1)
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -2064,23 +2011,25 @@ def _index_docs(
                 CREATE table if not exists batch_position(
                     field,
                     first_doc_id,
-                    doc_ids blob,
-                    doc_position_starts blob,
-                    last_doc_position,
+                    last_doc_id,
+                    docs_count,
+                    doc_ids roaring_bitmap,
+                    doc_position_starts roaring_bitmap,
                     primary key (field, first_doc_id)
                 )
                 """
             )
 
-            for field, (position_starts, doc_ids) in field_doc_position.items():
+            for field, (batch_doc_ids, position_starts) in field_doc_position.items():
                 local_db.execute(
-                    "insert into batch_position values(?, ?, ?, ?, ?)",
+                    "insert into batch_position values(?, ?, ?, ?, ?, ?)",
                     (
                         field,
-                        doc_ids[0],
-                        array.array("I", doc_ids),
-                        array.array("I", position_starts),
-                        position_starts[-1],
+                        first_doc_id,
+                        last_doc_id,
+                        len(batch_doc_ids),
+                        batch_doc_ids,
+                        position_starts[1:],
                     ),
                 )
 
@@ -2101,7 +2050,7 @@ def _index_docs(
                             values[value][0],
                             len(values[value][1]),
                             values[value][1] or None,
-                            doc_ids[0],
+                            first_doc_id,
                         )
                         for value in value_order
                     ),

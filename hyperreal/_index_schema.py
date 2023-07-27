@@ -39,28 +39,27 @@ CURRENT_SCHEMA = f"""
         value not null,
         docs_count integer not null,
         doc_ids roaring_bitmap not null,
-        position_count integer,
-        positions roaring_bitmap,
         unique (field, value)
     );
 
     --------
-    create table if not exists position_doc (
-        field,
-        position_start,
-        position_count integer,
-        doc_id integer references doc_key(doc_id) on delete cascade,
-        primary key (field, position_start, doc_id)
-    ) without rowid;
+    create table if not exists position_doc_map (
+        field text not null,
+        first_doc_id integer not null,
+        last_doc_id integer not null,
+        docs_count integer not null,
+        doc_ids roaring_bitmap not null,
+        doc_boundaries roaring_bitmap not null,
+        primary key (field, first_doc_id)
+    );
 
     --------
-    create index if not exists doc_position on position_doc(
-        doc_id,
-        field,
-        position_start,
-        -- Note we materialise this column so this can
-        -- always be used as a covering index.
-        position_count
+    create table if not exists position_index (
+        feature_id references inverted_index on delete cascade,
+        first_doc_id integer,
+        position_count integer,
+        positions roaring_bitmap,
+        primary key (feature_id, first_doc_id)
     );
 
     --------
@@ -72,13 +71,7 @@ CURRENT_SCHEMA = f"""
     );
 
     --------
-    create table if not exists skipgram_count (
-        feature_id_a integer references inverted_index(feature_id) on delete cascade,
-        feature_id_b integer references inverted_index(feature_id) on delete cascade,
-        distance integer,
-        docs_count integer,
-        primary key (feature_id_a, feature_id_b, distance)
-    ) without rowid;
+    drop table if exists skipgram_count;
 
     --------
     create index if not exists docs_counts on inverted_index(docs_count);
@@ -195,13 +188,7 @@ migrations = {
         ],
         [],
     ),
-    8: (
-        [
-            "alter table inverted_index add column position_count integer",
-            "alter table inverted_index add column positions roaring_bitmap",
-        ],
-        [],
-    ),
+    8: ([], []),
 }
 
 
