@@ -518,3 +518,38 @@ def test_indexing_utility(example_index_corpora_path, tmp_path, pool):
     hyperreal.index._index_docs(
         corpus, doc_keys, doc_ids, str(temp_index), 1, mp.Lock()
     )
+
+
+def test_field_intersection(tmp_path, pool):
+    data_path = pathlib.Path("tests", "data")
+    target_corpora_db = tmp_path / "sx_corpus.db"
+    target_index_db = tmp_path / "sx_corpus_index.db"
+
+    sx_corpus = hyperreal.corpus.StackExchangeCorpus(str(target_corpora_db))
+
+    sx_corpus.add_site_data(
+        str(data_path / "expat_sx" / "Posts.xml"),
+        str(data_path / "expat_sx" / "Comments.xml"),
+        str(data_path / "expat_sx" / "Users.xml"),
+        "https://expatriates.stackexchange.com",
+    )
+
+    sx_idx = hyperreal.index.Index(str(target_index_db), pool=pool, corpus=sx_corpus)
+    sx_idx.index()
+
+    queries = [
+        sx_idx[("Post", "visa")],
+        sx_idx[("created_month", "2020-06-01T00:00:00")],
+    ]
+
+    intersections = sx_idx.intersect_queries_with_field(queries, "created_year")
+
+    non_zero_month_intersection = 0
+    for year, _, query_inter in intersections:
+        assert query_inter[0] > 0
+        # the 'created_month' field selected should only have nonzero intersection
+        # with a single year.
+        if query_inter[1] > 0:
+            non_zero_month_intersection += 1
+
+    assert non_zero_month_intersection == 1

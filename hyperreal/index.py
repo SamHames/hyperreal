@@ -595,20 +595,47 @@ class Index:
             yield doc_key
 
     @atomic()
-    def convert_positions_to_query(self, field, positions):
+    def iter_field_docs(self, field, min_docs=1):
         """
-        Convert a bitset of positions in a field into a set of doc_ids.
+        Iterate through all values and corresponding doc_ids for the given field.
+
+        Iteration is by lexicographical order of the values.
 
         """
-        pass
 
-    @atomic()
-    def convert_query_to_field_positions(self, field, query):
+        value_docs = self.db.execute(
+            """
+            select value, docs_count, doc_ids
+            from inverted_index
+            where field = ?1
+                and docs_count >= ?2
+            order by value
+            """,
+            [field, min_docs],
+        )
+
+        for item in value_docs:
+            yield item
+
+    def intersect_queries_with_field(self, queries, field):
         """
-        Convert a set of doc_ids into positions for a specific field.
+        Intersect all the given queries with all features in the chosen field.
+
+        Note that this can take a long time with fields with many values, such
+        as tokenised text. This is best used with single value fields of low
+        cardinality (<100 distinct values). Examples of this might be
+        datetimes truncated to a year or ordinal ranges such as a likert
+        scale.
 
         """
-        pass
+
+        intersections = []
+
+        for value, docs_count, doc_ids in self.iter_field_docs(field):
+            inter = tuple(query.intersection_cardinality(doc_ids) for query in queries)
+            intersections.append((value, docs_count, inter))
+
+        return intersections
 
     @requires_corpus(corpus.BaseCorpus)
     def docs(self, query):
