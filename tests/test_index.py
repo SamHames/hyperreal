@@ -23,7 +23,7 @@ import hyperreal
 @pytest.fixture(scope="module")
 def pool():
     context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(2, mp_context=context) as pool:
+    with cf.ProcessPoolExecutor(4, mp_context=context) as pool:
         yield pool
 
 
@@ -537,19 +537,19 @@ def test_field_intersection(tmp_path, pool):
     sx_idx = hyperreal.index.Index(str(target_index_db), pool=pool, corpus=sx_corpus)
     sx_idx.index()
 
-    queries = [
-        sx_idx[("Post", "visa")],
-        sx_idx[("created_month", "2020-06-01T00:00:00")],
-    ]
+    queries = {
+        "visa": sx_idx[("Post", "visa")],
+        "June 2020": sx_idx[("created_month", "2020-06-01T00:00:00")],
+    }
 
-    intersections = sx_idx.intersect_queries_with_field(queries, "created_year")
+    values, totals, intersections = sx_idx.intersect_queries_with_field(
+        queries, "created_year"
+    )
 
     non_zero_month_intersection = 0
-    for year, _, query_inter in intersections:
-        assert query_inter[0] > 0
-        # the 'created_month' field selected should only have nonzero intersection
-        # with a single year.
-        if query_inter[1] > 0:
-            non_zero_month_intersection += 1
 
-    assert non_zero_month_intersection == 1
+    assert all(c > 0 for c in intersections["visa"])
+
+    # the 'created_month' query should only have nonzero intersection with a
+    # single year.
+    assert sum(1 for c in intersections["June 2020"] if c > 0) == 1

@@ -617,25 +617,33 @@ class Index:
         for item in value_docs:
             yield item
 
-    def intersect_queries_with_field(self, queries, field):
+    def intersect_queries_with_field(
+        self, queries: dict[Hashable, AbstractBitMap], field: str
+    ) -> tuple[list[Any], list[int], dict[Hashable, list[int]]]:
         """
-        Intersect all the given queries with all features in the chosen field.
+        Intersect all the given queries with all values in the chosen field.
 
         Note that this can take a long time with fields with many values, such
         as tokenised text. This is best used with single value fields of low
-        cardinality (<100 distinct values). Examples of this might be
-        datetimes truncated to a year or ordinal ranges such as a likert
+        cardinality (<1000 distinct values). Examples of this might be
+        datetimes truncated to a month, or ordinal ranges such as a likert
         scale.
 
         """
 
-        intersections = []
+        intersections = collections.defaultdict(list)
+        values = []
+        totals = []
 
         for value, docs_count, doc_ids in self.iter_field_docs(field):
-            inter = tuple(query.intersection_cardinality(doc_ids) for query in queries)
-            intersections.append((value, docs_count, inter))
+            values.append(value)
+            totals.append(docs_count)
 
-        return intersections
+            for name, query in queries.items():
+                inter = query.intersection_cardinality(doc_ids)
+                intersections[name].append(inter)
+
+        return values, totals, intersections
 
     @requires_corpus(corpus.BaseCorpus)
     def docs(self, query):
