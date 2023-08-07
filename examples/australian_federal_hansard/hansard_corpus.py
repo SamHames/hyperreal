@@ -17,6 +17,7 @@ it does better with malformed XML data in general.
 
 from collections import defaultdict, namedtuple
 import concurrent.futures as cf
+from datetime import date
 import logging
 import multiprocessing as mp
 import os
@@ -105,7 +106,16 @@ class HansardCorpus(SqliteBackedCorpus):
 
         speech_tokens = tokens(" ".join(root.itertext()))
 
-        return {"speech": speech_tokens}
+        speech_date = date.fromisoformat(doc["date"])
+        speech_month = speech_date.replace(day=1)
+        speech_year = speech_month.replace(month=1)
+
+        return {
+            "speech": speech_tokens,
+            "speech_date": set([speech_date.isoformat()]),
+            "speech_month": set([speech_month.isoformat()]),
+            "speech_year": set([speech_year.isoformat()]),
+        }
 
     def render_docs_html(self, doc_keys):
         """Return the given documents as HTML."""
@@ -147,7 +157,7 @@ class HansardCorpus(SqliteBackedCorpus):
         for key, doc in docs:
             speech = ElementTree.fromstring(doc["speech"])
             ElementTree.indent(speech)
-            doc["speech"] = ElementTree.tostring(speech, encoding="unicode")
+            doc["speech"] = "".join(speech.itertext())
             out_docs.append((key, doc))
 
         return out_docs
@@ -633,7 +643,7 @@ if __name__ == "__main__":
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
         idx = Index("test_index.db", corpus=corpus, pool=pool)
-        idx.index(position_window_size=5, doc_batch_size=10000)
+        idx.index(doc_batch_size=10000)
         idx.initialise_clusters(n_clusters=256, min_docs=10, include_fields=["speech"])
         idx.refine_clusters(iterations=50)
 
