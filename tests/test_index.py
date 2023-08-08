@@ -306,13 +306,13 @@ def test_querying(example_index_corpora_path, pool):
     assert index[feature_id] == index[("text", "the")]
 
 
-def test_require_corpus(example_index_corpora_path):
+def test_require_corpus(example_index_corpora_path, pool):
     """Test the corpus requiring decorator works."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
 
-    index_wo_corpus = hyperreal.index.Index(example_index_corpora_path[1])
+    index_wo_corpus = hyperreal.index.Index(example_index_corpora_path[1], pool=pool)
     index_wi_corpus = hyperreal.index.Index(
-        example_index_corpora_path[1], corpus=corpus
+        example_index_corpora_path[1], corpus=corpus, pool=pool
     )
 
     query = index_wo_corpus[("text", "the")]
@@ -389,7 +389,7 @@ def test_fixed_seed(example_index_path, pool, n_clusters):
 
     # Note we need to initialise a new object with the random seed, otherwise
     # as each random operation consumes items from the stream.
-    index = hyperreal.index.Index(example_index_path, random_seed=10)
+    index = hyperreal.index.Index(example_index_path, random_seed=10, pool=pool)
 
     index.initialise_clusters(n_clusters)
     index.refine_clusters(iterations=1)
