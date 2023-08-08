@@ -181,7 +181,20 @@ def test_sx_corpus(tmp_path):
 
     # Model
     result = runner.invoke(
-        cli.model, ["--iterations", "1", "--clusters", "16", str(target_index_db)]
+        cli.model,
+        [
+            "--iterations",
+            "1",
+            "--clusters",
+            "16",
+            "--min-docs",
+            "10",
+            "--include-field",
+            "Post",
+            "--include-field",
+            "UserPosting",
+            str(target_index_db),
+        ],
     )
 
     assert result.exit_code == 0
