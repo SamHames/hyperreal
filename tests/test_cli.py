@@ -111,10 +111,7 @@ def test_plaintext_corpus(tmp_path):
     assert result.exit_code == 0
 
 
-@pytest.mark.skipif(
-    os.environ.get("RUNNING_IN_CI", False),
-    reason="Requires Twitter API data which can't be stored in CI",
-)
+@pytest.mark.skip("Not actively supported any more.")
 def test_twittersphere_corpus(tmp_path):
     target_corpora_db = corpora_path / "twitter.db"
     target_index_db = tmp_path / "twitter_index.db"
