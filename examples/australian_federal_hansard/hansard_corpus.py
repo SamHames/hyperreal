@@ -104,6 +104,11 @@ class HansardCorpus(SqliteBackedCorpus):
             # Special case 1 - stray closing >
             root = ElementTree.fromstring(doc["speech"].replace(b"&gt;\n", b""))
 
+        talkers = root.findall(".//talker")
+        # Make sure older style hansard talker tags aren't indexed as text.
+        for elem in talkers:
+            elem.clear()
+
         speech_tokens = tokens(" ".join(root.itertext()))
 
         speech_date = date.fromisoformat(doc["date"])
@@ -643,8 +648,8 @@ if __name__ == "__main__":
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
         idx = Index("test_index.db", corpus=corpus, pool=pool)
-        idx.index(doc_batch_size=10000)
-        idx.initialise_clusters(n_clusters=256, min_docs=10, include_fields=["speech"])
+        idx.index(doc_batch_size=10000, position_window_size=1)
+        idx.initialise_clusters(n_clusters=512, min_docs=10, include_fields=["speech"])
         idx.refine_clusters(iterations=50)
 
         index_server = hyperreal.server.SingleIndexServer(
