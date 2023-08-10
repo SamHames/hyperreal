@@ -144,20 +144,24 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
 def test_model_creation(pool, example_index_path, n_clusters):
     """Test creation of a model (the core numerical component!)."""
-    index = hyperreal.index.Index(example_index_path, pool=pool)
+    idx = hyperreal.index.Index(example_index_path, pool=pool)
 
-    index.initialise_clusters(n_clusters)
-    index.refine_clusters(iterations=3)
+    idx.initialise_clusters(n_clusters)
+    idx.refine_clusters(iterations=3)
 
-    assert len(index.cluster_ids) == len(index.top_cluster_features())
-    assert 1 < len(index.cluster_ids) <= n_clusters
+    assert len(idx.cluster_ids) == len(idx.top_cluster_features())
+    assert 1 < len(idx.cluster_ids) <= n_clusters
 
     # Initialising with a field that doesn't exist should create an empty model.
-    index.initialise_clusters(n_clusters, include_fields=["banana"])
-    index.refine_clusters(iterations=3)
+    idx.initialise_clusters(n_clusters, include_fields=["banana"])
+    idx.refine_clusters(iterations=3)
 
-    assert len(index.cluster_ids) == len(index.top_cluster_features())
-    assert 0 == len(index.cluster_ids)
+    assert len(idx.cluster_ids) == len(idx.top_cluster_features())
+    assert 0 == len(idx.cluster_ids)
+
+    # No op cases - empty and single clusters selected.
+    assert idx._refine_feature_groups({}) == (dict(), set())
+    idx.refine_clusters(iterations=10, cluster_ids=[1])
 
 
 def test_model_editing(example_index_path, pool):

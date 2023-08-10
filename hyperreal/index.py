@@ -1504,8 +1504,13 @@ class Index:
 
         target_clusters = target_clusters or len(cluster_feature)
 
-        # If cluster_feature is empty, return immediately
-        if not len(cluster_feature.keys()):
+        # Handle cases where moves are not possible by returning immediately.
+        # If cluster_feature is empty
+        n_clusters = len(cluster_feature.keys())
+        if n_clusters == 0:
+            return cluster_feature, set()
+        # Or if there is only one cluster, and target_clusters is the same
+        elif n_clusters == 1 == target_clusters:
             return cluster_feature, set()
 
         # Make sure to copy the input dict
