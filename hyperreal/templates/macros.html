@@ -42,3 +42,22 @@
     {% endif %}
 </div>
 {%- endmacro %}
+
+{% macro render_context_search(index_id, fields, cluster_id=None) -%}
+<div class="feature-search">
+    <form method="get" action="/index/{{ index_id }}/search">
+        <label for="target_field">Search field:</label>
+        <select name="field" id="target_field">
+            {% for field in fields %}
+            <option value="{{ field }}">{{ field }}</option>
+            {% endfor %}
+        </select>
+        <label for="site-search">for</label>
+        <input type="search" id="target_value" name="value" />
+        <button type="submit">Search</button>
+        {% if cluster_id %}
+        <input type="hidden" name="cluster_id" value="{{ cluster_id }}"/>
+        {% endif %}
+    </form>
+</div> 
+{%- endmacro %}

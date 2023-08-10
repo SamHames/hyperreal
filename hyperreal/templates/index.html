@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% from 'macros.html' import render_cluster %}
+{% from 'macros.html' import render_cluster, render_context_search %}
 
 {% block title %}Feature Clustering{% endblock %}
 
@@ -11,6 +11,8 @@
 {% endblock %}
 
 {% block content %}
+{{ render_context_search(index_id, fields) }}
+
 <details>
     <summary>Edit Selected Clusters</summary>
     <form method="post" id="cluster_edit" action="/index/{{ index_id }}/cluster/delete">
@@ -23,7 +25,6 @@
         <button type="submit" formaction="/index/{{ index_id }}/cluster/merge" method="post">Merge Clusters</button>
     </form>
 </details>
-
 
 <ul class="cluster-list">
     {% if rendered_docs %}

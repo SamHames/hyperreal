@@ -125,6 +125,8 @@ class Cluster:
 
         total_docs = len(retrieve_docs)
 
+        fields = [row[0] for row in cherrypy.request.index.indexed_field_summary()]
+
         pinned = int(cluster_id in cherrypy.request.index.pinned_cluster_ids)
 
         return template.render(
@@ -139,6 +141,22 @@ class Cluster:
             next_cluster_id=next_cluster_id,
             pinned=pinned,
             visible_features=visible_features,
+            fields=fields,
+        )
+
+    @cherrypy.expose
+    def search(self, index_id, cluster_id, field, value):
+        """
+        Search a specific field for a specific value.
+
+        Currently this is limited to exact matches on a single value only.
+
+        """
+
+        feature_id = cherrypy.request.index.lookup_feature_id((field, value))
+
+        raise cherrypy.HTTPRedirect(
+            f"/index/{index_id}/cluster/{cluster_id}/?feature_id={feature_id}"
         )
 
 
@@ -321,6 +339,8 @@ class Index:
             )
             total_docs = 0
 
+        fields = [row[0] for row in cherrypy.request.index.indexed_field_summary()]
+
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
@@ -331,7 +351,29 @@ class Index:
             index_id=index_id,
             highlight_feature_id=highlight_feature_id,
             highlight_cluster_id=highlight_cluster_id,
+            fields=fields,
         )
+
+    @cherrypy.expose
+    def search(self, index_id, field, value, cluster_id=None):
+        """
+        Search a specific field for a specific value.
+
+        Currently this is limited to exact matches on a single value only.
+
+        If a cluster_id is provided the search will return to that specific
+        cluster view.
+
+        """
+
+        feature_id = cherrypy.request.index.lookup_feature_id((field, value))
+
+        if cluster_id is not None:
+            raise cherrypy.HTTPRedirect(
+                f"/index/{index_id}/cluster/{cluster_id}?feature_id={feature_id}"
+            )
+        else:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/?feature_id={feature_id}")
 
     @cherrypy.expose
     def details(self, index_id):
