@@ -725,7 +725,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         if doc["Body"]:
             body_html = fragment_fromstring(doc["Body"], create_parent="div")
 
-            for node in body_html.xpath("pre/code"):
+            for node in body_html.xpath("//pre/code"):
                 # Extract text of code blocks
                 code_blocks.append(" ".join(node.itertext()))
                 # Then remove them, treat everything else as post text
