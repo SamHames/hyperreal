@@ -27,6 +27,8 @@ body {
     box-shadow: 0 0 0.1em 0.1em gray;
     border-radius: 0.4em;
     justify-content: space-between;
+    padding-left: 0;
+    background: #f6f6f6;
 }
 
 .highlight {
@@ -37,11 +39,6 @@ body {
 .pinned {
     border: 0.2em solid blue;
     border-radius: 0.4em;   
-}
-
-.cluster-list li {
-    padding-left: 0;
-    background: #f6f6f6;
 }
 
 .compact-cluster {
@@ -87,6 +84,17 @@ body {
     border-radius: 0.4em;
 }
 
+.concordances {
+    padding: 0;
+    margin: 0;
+
+}
+.concordance-line {
+    list-style-type: none;
+    padding: 0;
+    margin: 0.5em;
+}
+
 img {
     max-width: 100%;
 }
@@ -128,6 +136,10 @@ img {
     display: table-cell;
 }
 
+.concordance-table {
+    background: white;
+}
+
 table {
     border-collapse: collapse;
     border-top: 0.1em solid black;
@@ -138,7 +150,7 @@ thead {
     border-bottom: 0.1em solid black;
 }
 
-tbody > tr:nth-child(odd) {background: #f6f6f6}
+tbody > tr:nth-of-type(odd) {background: #f6f6f6}
 
 th {
     padding: 0.5em;

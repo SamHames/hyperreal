@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% from 'macros.html' import render_cluster, render_context_search %}
+{% from 'macros.html' import render_cluster, render_context_search, render_all_field_matches %}
 
 {% block title %}Feature Clustering{% endblock %}
 
@@ -32,13 +32,20 @@
         <div class="cluster-header">
             {% if rendered_docs|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
         </div>
-        <ul class="doc-list">
-            {% for doc_id, doc in rendered_docs %}
-            <li>{{ doc }}</li>
-            {% endfor %}
-        </ul>
+
+        {% if concordances %}
+            {{ render_all_field_matches(rendered_docs) }}
+
+        {% else %}
+            <ul class="doc-list">
+                {% for doc_id, doc in rendered_docs %}
+                <li>{{ doc }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
     </li>
     {% endif %}
+
 
     {% for cluster_id, cluster_score, features in clusters %}
     <li>
