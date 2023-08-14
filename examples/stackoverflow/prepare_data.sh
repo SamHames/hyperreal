@@ -35,17 +35,18 @@ hyperreal stackexchange-corpus add-site \
 	data/stackoverflow.db
 
 hyperreal stackexchange-corpus index \
-	--doc-batch-size 50000 \
+	--doc-batch-size 200000 \
 	data/stackoverflow.db \
 	data/stackoverflow_index.db
 
 hyperreal model \
-	--clusters 512 \
+	--clusters 1024 \
 	--include-field Post \
-	--include-field Tag \
-	--min-docs 29 \
+	--min-docs 290 \
 	--random-seed 2023 \
-	--tolerance 0.01 \
+	--tolerance 0.001 \
+	--iterations 100 \
+	--restart \
 	data/stackoverflow_index.db
 
 # Launch the webserver, then navigate to localhost:8080 in your browser
