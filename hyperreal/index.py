@@ -179,7 +179,7 @@ class Index:
             row[0]: row[1] for row in self.db.execute("select key, value from settings")
         }
 
-        self.settings["display_query_results"] = "concordance"
+        self.settings["display_query_results"] = "display"
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
