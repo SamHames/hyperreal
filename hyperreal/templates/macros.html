@@ -11,6 +11,51 @@
 {%- endmacro %}
 
 
+{% macro render_all_field_matches(matches) %}
+<table class="concordance-table">
+    <caption>Documents and properties matching the query.</caption>
+    <thead>
+        <tr>
+            <th>Document</th>
+            <th>Field</th>
+            <th>Value</th>
+            <th>Concordances</th>
+        </tr>
+    </thead>
+
+    <tbody>
+    {% for doc_key, doc_id, field_matches in matches %}
+        {% set doc_loop = loop %}
+        {% for field, matches in field_matches.items() %}
+            {% set field_loop = loop %}
+            {% for value, concordances in matches.items() %}
+            <tr>
+                {% if doc_loop.changed(doc_key) %}
+                    <th rowspan="{{ field_matches.values() | map('length') | sum }}">{{ doc_key }}</th>
+                {% endif %}
+                {% if field_loop.changed(field) %}
+                    <td rowspan="{{ matches|length }}">{{ field }}</td>
+                {% endif %}
+                <td>{{ value }}</td>
+                <td>
+                    {% if concordances %}
+                    <ul class="concordances">
+                        {% for line in concordances %}
+                        <li class="concordance-line">{{ line }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+    </tbody>
+</table>
+{%- endmacro %}
+
+
+
 {% macro render_cluster(index_id, cluster_id, features, cluster_score=None, highlight_cluster_id=None, highlight_feature_id=None, context='index') -%}
 <div class="feature-cluster">
     <div class="cluster-header {% if cluster_id == highlight_cluster_id %}highlight{% endif %}">

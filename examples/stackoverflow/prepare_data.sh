@@ -25,7 +25,7 @@ wget -c -N -O data/Users.7z \
 python -m venv stackoverflow_analysis
 source stackoverflow_analysis/bin/activate
 
-pip install hyperreal[stackexchange]
+pip install hyperreal[stackexchange] leather tablib[html]
 
 hyperreal stackexchange-corpus add-site \
 	data/Posts.xml \
@@ -35,18 +35,21 @@ hyperreal stackexchange-corpus add-site \
 	data/stackoverflow.db
 
 hyperreal stackexchange-corpus index \
-	--doc-batch-size 50000 \
+	--doc-batch-size 200000 \
 	data/stackoverflow.db \
 	data/stackoverflow_index.db
 
 hyperreal model \
-	--clusters 512 \
+	--clusters 1024 \
 	--include-field Post \
-	--include-field Tag \
-	--min-docs 29 \
+	--min-docs 290 \
 	--random-seed 2023 \
-	--tolerance 0.01 \
+	--tolerance 0.001 \
+	--iterations 100 \
+	--restart \
 	data/stackoverflow_index.db
+
+python visuals.py
 
 # Launch the webserver, then navigate to localhost:8080 in your browser
 hyperreal stackexchange-corpus serve \

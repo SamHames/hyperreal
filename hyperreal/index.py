@@ -175,11 +175,11 @@ class Index:
 
         self.corpus = corpus
 
-        self.position_window_size = list(
-            self.db.execute(
-                "select value from settings where key = 'position_window_size'"
-            )
-        )[0][0]
+        self.settings = {
+            row[0]: row[1] for row in self.db.execute("select key, value from settings")
+        }
+
+        self.settings["display_query_results"] = "display"
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -579,7 +579,7 @@ class Index:
 
             tempdir.cleanup()
 
-        self.position_window_size = position_window_size
+        self.settings["position_window_size"] = position_window_size
         self.logger.info("Indexing completed.")
 
     @atomic()
@@ -653,12 +653,12 @@ class Index:
 
     @requires_corpus(corpus.BaseCorpus)
     @atomic()
-    def extract_matching_windows(
+    def extract_matching_feature_windows(
         self, query, features, window_size, random_sample_size=None
     ):
         """
-        Retrieve cooccurrence windows around each matching feature in each of
-        the given documents.
+        Retrieve matching features and cooccurrence windows around each
+        matching feature in sequence fields in each of the given documents.
 
         window_size is the number of features to extract either size of a match.
 
@@ -690,36 +690,52 @@ class Index:
             doc_cooccurrence = dict()
 
             for field, to_match in field_features.items():
-                cooccurrence = []
-                values = indexed.get(field, [])
+                cooccurrence = collections.defaultdict(list)
+                values = indexed.get(field, set())
 
-                for i, value in enumerate(values):
-                    if value in to_match:
-                        start_window = max(0, i - window_size)
-                        cooccurrence.append(
-                            (value, values[start_window : i + window_size + 1])
-                        )
+                if isinstance(values, collections.abc.Sequence):
+                    for i, value in enumerate(values):
+                        if value in to_match:
+                            start_window = max(0, i - window_size)
+                            cooccurrence[value].append(
+                                values[start_window : i + window_size + 1]
+                            )
+                else:
+                    for value in to_match & values:
+                        cooccurrence[value]
 
                 doc_cooccurrence[field] = cooccurrence
 
             yield (doc_key, doc_id, doc_cooccurrence)
 
-    def concordances(self, query, features, window_size, random_sample_size=None):
+    def concordances(
+        self, query, features, window_size, random_sample_size=None, join_character=" "
+    ):
         """
         A utility function that wraps the cooccurrence function to produce
         text strings instead.
 
         """
-        for doc_key, doc_id, cooccurrence_windows in self.extract_matching_windows(
+        for (
+            doc_key,
+            doc_id,
+            cooccurrence_windows,
+        ) in self.extract_matching_feature_windows(
             query, features, window_size, random_sample_size=random_sample_size
         ):
-            yield doc_key, doc_id, {
-                field: [
-                    " ".join(w for w in window if w is not None)
-                    for _, window in windows
-                ]
-                for field, windows in cooccurrence_windows.items()
-            }
+            match_concordances = dict()
+            for field, match_windows in cooccurrence_windows.items():
+                field_matches = dict()
+                for match, windows in match_windows.items():
+                    field_matches[match] = []
+                    for window in windows:
+                        field_matches[match].append(
+                            join_character.join(w for w in window if w is not None)
+                        )
+
+                match_concordances[field] = field_matches
+
+            yield doc_key, doc_id, match_concordances
 
     def sample_bitmap(self, bitmap, random_sample_size):
         """

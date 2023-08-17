@@ -81,10 +81,17 @@ class Cluster:
         n_features = len(features)
         rendered_docs = []
         query = None
+        concordances = False
+
+        # Default concordance features is everything in the cluster, unless other things
+        # are set?
+        concordance_features = [r[1:3] for r in features]
 
         if feature_id is not None:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
+
+            concordance_features.append(feature_id)
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
@@ -92,6 +99,12 @@ class Cluster:
                 query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
             else:
                 query = cherrypy.request.index.cluster_docs(filter_cluster_id)
+            concordance_features.extend(
+                [
+                    r[1:3]
+                    for r in cherrypy.request.index.cluster_features(filter_cluster_id)
+                ]
+            )
 
         if query:
             sorted_features = list(
@@ -119,9 +132,24 @@ class Cluster:
 
         # Retrieve matching documents if we have a corpus to render them.
         if cherrypy.request.index.corpus is not None:
-            rendered_docs = cherrypy.request.index.render_docs_html(
-                retrieve_docs, random_sample_size=int(exemplar_docs)
+            concordances = (
+                cherrypy.request.index.settings["display_query_results"]
+                == "concordance"
             )
+
+            if concordances:
+                rendered_docs = list(
+                    cherrypy.request.index.concordances(
+                        retrieve_docs,
+                        concordance_features,
+                        15,
+                        random_sample_size=int(exemplar_docs),
+                    )
+                )
+            else:
+                rendered_docs = cherrypy.request.index.render_docs_html(
+                    retrieve_docs, random_sample_size=int(exemplar_docs)
+                )
 
         total_docs = len(retrieve_docs)
 
@@ -136,6 +164,7 @@ class Cluster:
             index_id=index_id,
             cluster_score=None,
             rendered_docs=rendered_docs,
+            concordances=concordances,
             total_docs=total_docs,
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
@@ -307,6 +336,7 @@ class Index:
         query = None
         highlight_cluster_id = None
         highlight_feature_id = None
+        concordances = False
 
         # Redirect to the index overview page to create a new model if no
         # index has been created.
@@ -316,10 +346,15 @@ class Index:
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
             highlight_feature_id = int(feature_id)
+            concordance_features = [highlight_feature_id]
 
         elif cluster_id is not None:
             query = cherrypy.request.index.cluster_docs(int(cluster_id))
             highlight_cluster_id = int(cluster_id)
+            concordance_features = [
+                f[1:3]
+                for f in cherrypy.request.index.cluster_features(highlight_cluster_id)
+            ]
 
         if query:
             clusters = cherrypy.request.index.pivot_clusters_by_query(
@@ -327,9 +362,23 @@ class Index:
             )
 
             if cherrypy.request.index.corpus is not None:
-                rendered_docs = cherrypy.request.index.render_docs_html(
-                    query, random_sample_size=int(exemplar_docs)
+                concordances = (
+                    cherrypy.request.index.settings["display_query_results"]
+                    == "concordance"
                 )
+                if concordances:
+                    rendered_docs = list(
+                        cherrypy.request.index.concordances(
+                            query,
+                            concordance_features,
+                            15,
+                            random_sample_size=int(exemplar_docs),
+                        )
+                    )
+                else:
+                    rendered_docs = cherrypy.request.index.render_docs_html(
+                        query, random_sample_size=int(exemplar_docs)
+                    )
 
             total_docs = len(query)
 
@@ -345,6 +394,7 @@ class Index:
             clusters=clusters,
             total_docs=total_docs,
             rendered_docs=rendered_docs,
+            concordances=concordances,
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that
             # needs it?

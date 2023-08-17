@@ -548,7 +548,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     TEMPLATE = Template(
         """
         <details>
-            <summary><em>{{ base_fields["QuestionTitle"] }}</em> - {{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}</summary>
+            <summary><em>{{ base_fields["QuestionTitle"] | e }}</em> - {{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}</summary>
             
             <p>
                 <small>
