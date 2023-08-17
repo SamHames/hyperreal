@@ -81,6 +81,7 @@ class Cluster:
         n_features = len(features)
         rendered_docs = []
         query = None
+        concordances = False
 
         # Default concordance features is everything in the cluster, unless other things
         # are set?
