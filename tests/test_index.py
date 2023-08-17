@@ -126,13 +126,17 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
         )
 
         # Test window extraction from documents.
-        for doc_key, doc_id, cooccurrence_windows in idx.extract_matching_windows(
+        for (
+            doc_key,
+            doc_id,
+            cooccurrence_windows,
+        ) in idx.extract_matching_feature_windows(
             idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
         ):
-            for match, window in cooccurrence_windows["text"]:
+            for match, windows in cooccurrence_windows["text"].items():
                 assert match in ["mad", "hatter"]
-                assert "hatter" in window or "mad" in window
-                assert len(window) <= 21
+                assert all("hatter" in window or "mad" in window for window in windows)
+                assert all(len(window) <= 21 for window in windows)
 
         for doc_key, doc_id, concordances in idx.concordances(
             idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
