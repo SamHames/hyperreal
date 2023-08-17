@@ -25,7 +25,7 @@ wget -c -N -O data/Users.7z \
 python -m venv stackoverflow_analysis
 source stackoverflow_analysis/bin/activate
 
-pip install hyperreal[stackexchange]
+pip install hyperreal[stackexchange] leather tablib[html]
 
 hyperreal stackexchange-corpus add-site \
 	data/Posts.xml \
@@ -48,6 +48,8 @@ hyperreal model \
 	--iterations 100 \
 	--restart \
 	data/stackoverflow_index.db
+
+python visuals.py
 
 # Launch the webserver, then navigate to localhost:8080 in your browser
 hyperreal stackexchange-corpus serve \
