@@ -17,8 +17,12 @@ if __name__ == "__main__":
         pass
 
     leather.theme.default_chart_height = 400
-    leather.theme.default_chart_width = 800
+    leather.theme.default_chart_width = 1000
     leather.theme.background_color = "white"
+    leather.theme.axis_title_color = "black"
+    leather.theme.label_color = "black"
+    leather.theme.legend_color = "black"
+    leather.theme.title_color = "black"
 
     corp = corpus.StackExchangeCorpus("data/stackoverflow.db")
     idx = index.Index("data/stackoverflow_index.db")
@@ -120,7 +124,7 @@ if __name__ == "__main__":
     )
 
     leather.theme.default_chart_height = 400
-    leather.theme.default_chart_width = 800
+    leather.theme.default_chart_width = 1000
 
     chart = leather.Chart("Javascript and Frameworks")
     for query, counts in intersections.items():
@@ -146,7 +150,7 @@ if __name__ == "__main__":
     )
 
     leather.theme.default_chart_height = 400
-    leather.theme.default_chart_width = 800
+    leather.theme.default_chart_width = 1000
 
     chart = leather.Chart("Orchestration/Containerisation")
     for query, counts in intersections.items():
@@ -171,7 +175,7 @@ if __name__ == "__main__":
     )
 
     leather.theme.default_chart_height = 400
-    leather.theme.default_chart_width = 800
+    leather.theme.default_chart_width = 1000
 
     chart = leather.Chart("Overhyped")
     for query, counts in intersections.items():
@@ -182,103 +186,103 @@ if __name__ == "__main__":
 
     chart.to_svg("outputs/overhyped_trends.svg")
 
-    # # Trends for word cluster usage relative to the Tag python over time.
-    # tag_python = idx[("Tag", "python")] & idx[("PostType", "Question")]
-    # clusters = idx.pivot_clusters_by_query(tag_python, top_k=5)
+    # Trends for word cluster usage relative to the Tag python over time.
+    tag_python = idx[("Tag", "python")] & idx[("PostType", "Question")]
+    clusters = idx.pivot_clusters_by_query(tag_python, top_k=5)
 
-    # queries = {
-    #     " ".join([r[2] for r in features] + ["..."]): tag_python
-    #     & idx.cluster_docs(cluster_id)
-    #     for cluster_id, _, features in clusters
-    # }
+    queries = {
+        " ".join([r[2] for r in features] + ["..."]): tag_python
+        & idx.cluster_docs(cluster_id)
+        for cluster_id, _, features in clusters
+    }
 
-    # values, totals, intersections = idx.intersect_queries_with_field(
-    #     queries, "created_month"
-    # )
-    # (
-    #     python_values,
-    #     python_totals,
-    #     python_intersections,
-    # ) = idx.intersect_queries_with_field({"tag_python": tag_python}, "created_month")
+    values, totals, intersections = idx.intersect_queries_with_field(
+        queries, "created_month"
+    )
+    (
+        python_values,
+        python_totals,
+        python_intersections,
+    ) = idx.intersect_queries_with_field({"tag_python": tag_python}, "created_month")
 
-    # dates = [datetime.fromisoformat(date) for date in values]
+    dates = [datetime.fromisoformat(date) for date in values]
 
-    # leather.theme.default_chart_height = 150
-    # leather.theme.default_chart_width = 450
-    # grid = leather.Grid()
-    # display_order = sorted(intersections.items(), reverse=True, key=lambda x: sum(x[1]))
-    # for query, counts in display_order:
-    #     chart = leather.Chart(query)
-    #     data = list(
-    #         zip(
-    #             dates,
-    #             [
-    #                 100 * c / (t or 1)
-    #                 for c, t in zip(counts, python_intersections["tag_python"])
-    #             ],
-    #         )
-    #     )[1:-1]
-    #     chart.add_line(data)
-    #     chart.add_y_axis(name="% of Questions")
-    #     grid.add_one(chart)
+    leather.theme.default_chart_height = 150
+    leather.theme.default_chart_width = 450
+    grid = leather.Grid()
+    display_order = sorted(intersections.items(), reverse=True, key=lambda x: sum(x[1]))
+    for query, counts in display_order:
+        chart = leather.Chart(query)
+        data = list(
+            zip(
+                dates,
+                [
+                    100 * c / (t or 1)
+                    for c, t in zip(counts, python_intersections["tag_python"])
+                ],
+            )
+        )[1:-1]
+        chart.add_line(data)
+        chart.add_y_axis(name="% of Questions")
+        grid.add_one(chart)
 
-    # grid.to_svg("outputs/stackoverflow_python_tag_question_word_usage.svg")
+    grid.to_svg("outputs/stackoverflow_python_tag_question_word_usage.svg")
 
-    # # Trends for word cluster usage relative to the Tag python over time.
-    # tag_python_answers = idx[("Tag", "python")] - idx[("PostType", "Question")]
-    # clusters = idx.pivot_clusters_by_query(tag_python_answers, top_k=5)
+    # Trends for word cluster usage relative to the Tag python over time.
+    tag_python_answers = idx[("Tag", "python")] - idx[("PostType", "Question")]
+    clusters = idx.pivot_clusters_by_query(tag_python_answers, top_k=5)
 
-    # queries = {
-    #     " ".join([r[2] for r in features] + ["..."]): tag_python_answers
-    #     & idx.cluster_docs(cluster_id)
-    #     for cluster_id, _, features in clusters
-    # }
+    queries = {
+        " ".join([r[2] for r in features] + ["..."]): tag_python_answers
+        & idx.cluster_docs(cluster_id)
+        for cluster_id, _, features in clusters
+    }
 
-    # values, totals, intersections_answers = idx.intersect_queries_with_field(
-    #     queries, "created_month"
-    # )
-    # (
-    #     python_values,
-    #     python_totals,
-    #     python_intersections,
-    # ) = idx.intersect_queries_with_field({"tag_python": tag_python}, "created_month")
+    values, totals, intersections_answers = idx.intersect_queries_with_field(
+        queries, "created_month"
+    )
+    (
+        python_values,
+        python_totals,
+        python_intersections,
+    ) = idx.intersect_queries_with_field({"tag_python": tag_python}, "created_month")
 
-    # dates = [datetime.fromisoformat(date) for date in values]
+    dates = [datetime.fromisoformat(date) for date in values]
 
-    # leather.theme.default_chart_height = 150
-    # leather.theme.default_chart_width = 450
-    # grid = leather.Grid()
-    # display_order = sorted(intersections.items(), reverse=True, key=lambda x: sum(x[1]))
-    # for query, counts in display_order:
-    #     chart = leather.Chart(query)
-    #     data = list(
-    #         zip(
-    #             dates,
-    #             [
-    #                 100 * c / (t or 1)
-    #                 for c, t in zip(counts, python_intersections["tag_python"])
-    #             ],
-    #         )
-    #     )[1:-1]
-    #     chart.add_line(data)
-    #     chart.add_y_axis(name="% of Questions")
-    #     grid.add_one(chart)
+    leather.theme.default_chart_height = 150
+    leather.theme.default_chart_width = 450
+    grid = leather.Grid()
+    display_order = sorted(intersections.items(), reverse=True, key=lambda x: sum(x[1]))
+    for query, counts in display_order:
+        chart = leather.Chart(query)
+        data = list(
+            zip(
+                dates,
+                [
+                    100 * c / (t or 1)
+                    for c, t in zip(counts, python_intersections["tag_python"])
+                ],
+            )
+        )[1:-1]
+        chart.add_line(data)
+        chart.add_y_axis(name="% of Questions")
+        grid.add_one(chart)
 
-    # grid.to_svg("outputs/stackoverflow_python_tag_answer_word_usage.svg")
+    grid.to_svg("outputs/stackoverflow_python_tag_answer_word_usage.svg")
 
     ## All Python Q+A things over time as individual plots.
     tag_python_q = idx[("Tag", "python")] & idx[("PostType", "Question")]
     tag_python_a = idx[("Tag", "python")] - idx[("PostType", "Question")]
-    clusters = list(idx.pivot_clusters_by_query(idx[("Tag", "python")], top_k=5))
+    clusters = list(idx.pivot_clusters_by_query(idx[("Tag", "python")], top_k=10))
 
     queries_q = {
-        " ".join([r[2] for r in features] + ["..."]): tag_python_q
+        " ".join([r[2] for r in features] + ["..."])[:80]: tag_python_q
         & idx.cluster_docs(cluster_id)
         for cluster_id, _, features in clusters
     }
 
     queries_a = {
-        " ".join([r[2] for r in features] + ["..."]): tag_python_a
+        " ".join([r[2] for r in features] + ["..."])[:80]: tag_python_a
         & idx.cluster_docs(cluster_id)
         for cluster_id, _, features in clusters
     }
@@ -301,7 +305,7 @@ if __name__ == "__main__":
     dates = [datetime.fromisoformat(date) for date in values]
 
     leather.theme.default_chart_height = 400
-    leather.theme.default_chart_width = 800
+    leather.theme.default_chart_width = 1000
 
     # Overall amount of Questions and Answers to questions tagged with Python.
     chart = leather.Chart("All Python Tagged Q+A")
