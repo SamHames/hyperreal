@@ -265,50 +265,6 @@ class Index:
             except IndexError:
                 return BitMap()
 
-        elif isinstance(key, slice):
-            if key.step is not None and key.step != 1:
-                raise ValueError("Only stepsize of 1 is supported for slicing.")
-            if key.start is None or key.stop is None:
-                raise ValueError("Neither the start or end values can be None.")
-            if key.start[0] != key.stop[0]:
-                raise ValueError("Slicing is only supported on a single field.")
-
-            results = BitMap()
-
-            matching = self.db.execute(
-                """
-                select doc_ids
-                from inverted_index
-                where (field, value) >= (?, ?)
-                    and (field, value) < (?, ?)
-                """,
-                (*key.start, *key.stop),
-            )
-
-            for (q,) in matching:
-                results |= q
-
-            return results
-
-    def __setitem__(self, key: tuple[str, Any], doc_ids: AbstractBitMap) -> None:
-        """
-        Create a new feature in the index.
-
-        Note:
-
-        - Existing features are immutable and cannot be changed.
-        - Features added in this way are not currently preserved on reindexing.
-
-        """
-
-        try:
-            self.db.execute(
-                "insert into inverted_index(field, value, docs_count, doc_ids) values(?, ?, ?, ?)",
-                [*key, len(doc_ids), doc_ids],
-            )
-        except sqlite3.IntegrityError:
-            raise KeyError(f"Feature {key} already exists.")
-
     def lookup_feature(self, feature_id: int) -> tuple[str, Any]:
         """Lookup the (field, value) for this feature by feature_id."""
 

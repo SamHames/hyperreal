@@ -353,28 +353,6 @@ def test_pivoting(example_index_path, pool):
                 assert False
 
 
-def test_create_new_features(example_index_corpora_path, pool):
-    """Test creating new features - possibly from old features."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    index = hyperreal.index.Index(
-        example_index_corpora_path[1], corpus=corpus, pool=pool
-    )
-
-    new_feature = index[("text", "the")] & index[("text", "and")]
-    new_feature_key = ("custom", "arbitrary new feature")
-    index[new_feature_key] = new_feature
-
-    assert index[new_feature_key] == new_feature
-
-    with pytest.raises(KeyError):
-        index[("text", "the")] = index[("text", "the")]
-
-    # Reindexing will remove the custom feature
-    index.index()
-
-    assert not len(index[new_feature_key])
-
-
 @pytest.mark.parametrize("n_clusters", [4, 8, 16])
 def test_fixed_seed(example_index_path, pool, n_clusters):
     """
