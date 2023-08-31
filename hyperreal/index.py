@@ -224,6 +224,18 @@ class Index:
         except sqlite3.OperationalError:
             return False
 
+    def __enter__(self):
+        self.db.execute("begin")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __getstate__(self):
+        return self.db_path, self.corpus
+
+    def __setstate__(self, args):
+        self.__init__(args[0], corpus=args[1])
+
     def close(self):
         self.db.close()
 
@@ -1138,7 +1150,7 @@ class Index:
         futures = [
             self.pool.submit(
                 _calculate_query_cluster_cooccurrence,
-                self.db_path,
+                self,
                 0,
                 query,
                 cluster_ids[i::jobs],
@@ -1157,7 +1169,7 @@ class Index:
             futures = [
                 self.pool.submit(
                     _pivot_cluster_features_by_query_jaccard,
-                    self.db_path,
+                    self,
                     query,
                     cluster_id,
                     top_k,
@@ -1258,7 +1270,7 @@ class Index:
         futures = {
             self.pool.submit(
                 measure_feature_contribution_to_cluster,
-                self.db_path,
+                self,
                 cluster,
                 features,
                 probe_query,
@@ -1316,7 +1328,7 @@ class Index:
         futures = [
             self.pool.submit(
                 measure_add_features_to_cluster,
-                self.db_path,
+                self,
                 cluster_key,
                 cluster_feature[cluster_key],
                 cluster_check_feature[cluster_key] - cluster_feature[cluster_key],
@@ -1886,7 +1898,7 @@ class Index:
         # Then update the union statistics for all of the clusters
         bg_args = (
             (
-                self.db_path,
+                self,
                 cluster_param[0],
                 [
                     row[0]
@@ -1952,7 +1964,7 @@ class Index:
             futures.add(
                 self.pool.submit(
                     _calculate_query_cluster_cooccurrence,
-                    self.db_path,
+                    self,
                     cluster_id,
                     query,
                     comparison_clusters,
@@ -2120,12 +2132,8 @@ def _index_docs(
     return temp_db_path
 
 
-def _calculate_query_cluster_cooccurrence(index_db_path, key, query, cluster_ids):
-    idx = Index(index_db_path)
-
-    try:
-        idx.db.execute("begin")
-
+def _calculate_query_cluster_cooccurrence(idx, key, query, cluster_ids):
+    with idx:
         weights = []
 
         for cluster_id in cluster_ids:
@@ -2136,51 +2144,49 @@ def _calculate_query_cluster_cooccurrence(index_db_path, key, query, cluster_ids
                 sim = query.jaccard_index(cluster_docs)
                 weights.append((cluster_id, sim, inter))
 
-    finally:
-        idx.db.execute("commit")
-
     return key, weights
 
 
 def _pivot_cluster_features_by_query_jaccard(
-    index_db_path, query, cluster_id, top_k, cluster_inter
+    idx, query, cluster_id, top_k, cluster_inter
 ):
-    idx = Index(index_db_path)
+    with idx:
+        results = [(0, -1, "", "")] * top_k
 
-    results = [(0, -1, "", "")] * top_k
+        q = len(query)
 
-    q = len(query)
+        features = (
+            (min(f[-1], cluster_inter) / (q + f[-1] - min(f[-1], cluster_inter)), *f)
+            for f in idx.cluster_features(cluster_id)
+        )
 
-    features = (
-        (min(f[-1], cluster_inter) / (q + f[-1] - min(f[-1], cluster_inter)), *f)
-        for f in idx.cluster_features(cluster_id)
-    )
+        search_order = sorted(features, reverse=True)
 
-    search_order = sorted(features, reverse=True)
+        # TODO: find further ways to accelerate this - it seems like most features
+        # end up being checked when the similarity is low.
+        for max_threshold, f_id, field, value, docs_count in search_order:
+            # Early break if the length threshold can't be reached.
+            if max_threshold < results[0][0]:
+                break
 
-    # TODO: find further ways to accelerate this - it seems like most features
-    # end up being checked when the similarity is low.
-    for max_threshold, f_id, field, value, docs_count in search_order:
-        # Early break if the length threshold can't be reached.
-        if max_threshold < results[0][0]:
-            break
+            heapq.heappushpop(
+                results, (query.jaccard_index(idx[f_id]), f_id, field, value)
+            )
 
-        heapq.heappushpop(results, (query.jaccard_index(idx[f_id]), f_id, field, value))
+        results = sorted(
+            ((*r[1:], r[0]) for r in results if r[0] > 0),
+            reverse=True,
+            key=lambda r: r[3],
+        )
 
-    results = sorted(
-        ((*r[1:], r[0]) for r in results if r[0] > 0), reverse=True, key=lambda r: r[3]
-    )
-
-    # Finally compute the similarity of the query with the cluster.
-    similarity = query.jaccard_index(idx.cluster_docs(cluster_id))
-
-    idx.close()
+        # Finally compute the similarity of the query with the cluster.
+        similarity = query.jaccard_index(idx.cluster_docs(cluster_id))
 
     return cluster_id, similarity, results
 
 
 def measure_feature_contribution_to_cluster(
-    index_db_path,
+    idx,
     group_key,
     feature_group: set[int],
     probe_query: Optional[AbstractBitMap],
@@ -2197,10 +2203,7 @@ def measure_feature_contribution_to_cluster(
 
     """
 
-    try:
-        index = Index(index_db_path)
-        index.db.execute("begin")
-
+    with idx:
         # FIRST PHASE: compute the objective and minimal cover stats for the
         # current cluster.
 
@@ -2219,7 +2222,7 @@ def measure_feature_contribution_to_cluster(
         # Construct the union of all cluster tokens, and also the set of
         # documents only covered by a single feature.
         for feature in feature_group:
-            docs = index[feature]
+            docs = idx[feature]
 
             if probe_query:
                 docs &= probe_query
@@ -2247,7 +2250,7 @@ def measure_feature_contribution_to_cluster(
         # Effectively we're counting the negative of the score for removing that feature
         # as the effect of adding it to the cluster.
         for i, feature in enumerate(feature_array):
-            docs = index[feature]
+            docs = idx[feature]
 
             if probe_query:
                 docs &= probe_query
@@ -2278,15 +2281,11 @@ def measure_feature_contribution_to_cluster(
 
             delta_array[i] = delta
 
-    finally:
-        index.db.execute("commit")
-        index.close()
-
     return group_key, feature_array, delta_array, objective
 
 
 def measure_add_features_to_cluster(
-    index_db_path,
+    idx,
     group_key,
     feature_group: set[int],
     add_features: set[int],
@@ -2299,10 +2298,7 @@ def measure_add_features_to_cluster(
 
     """
 
-    try:
-        index = Index(index_db_path)
-        index.db.execute("begin")
-
+    with idx:
         # PHASE 1: Current cluster objective and cover.
 
         # Handle the case of the empty cluster.
@@ -2318,7 +2314,7 @@ def measure_add_features_to_cluster(
         # Construct the union of all cluster tokens, and also the set of
         # documents only covered by a single feature.
         for feature in feature_group:
-            docs = index[feature]
+            docs = idx[feature]
 
             if probe_query:
                 docs &= probe_query
@@ -2338,7 +2334,7 @@ def measure_add_features_to_cluster(
 
         # All tokens that are adds (not already in the cluster)
         for i, feature in enumerate(feature_array):
-            docs = index[feature]
+            docs = idx[feature]
 
             if probe_query:
                 docs &= probe_query
@@ -2361,29 +2357,19 @@ def measure_add_features_to_cluster(
 
             delta_array[i] = delta
 
-    finally:
-        index.db.execute("commit")
-        index.close()
-
     return group_key, feature_array, delta_array
 
 
 def _union_query(args):
-    index_db_path, query_key, feature_ids = args
+    idx, query_key, feature_ids = args
 
-    try:
-        index = Index(index_db_path)
-        index.db.execute("begin")
+    with idx:
         query = BitMap()
         weight = 0
 
         for feature_id in feature_ids:
-            docs = index[feature_id]
+            docs = idx[feature_id]
             query |= docs
             weight += len(docs)
-
-    finally:
-        index.db.execute("commit")
-        index.close()
 
     return query_key, query, weight
