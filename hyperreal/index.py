@@ -585,6 +585,79 @@ class Index:
         for item in value_docs:
             yield item
 
+    @atomic()
+    def _or_partition_positions(self, features):
+        # Make sure that all of the features are from the same field.
+        fields_covered = set()
+        query_features = set()
+
+        for f in features:
+            if isinstance(f, int):
+                fields_covered.add(self.lookup_feature(f)[0])
+                query_features.add(f)
+            elif isinstance(f, tuple):
+                fields_covered.add(f[0])
+                query_features.add(self.lookup_feature_id(f))
+            else:
+                raise TypeError(f"Unsupported feature {f}.")
+
+        if len(fields_covered) != 1:
+            raise ValueError(
+                f"Positions are only valid for a single field. "
+                "Features are from the following fields: {fields_covered}."
+            )
+
+        field = fields_covered.pop()
+
+        partitions = self.db.execute(
+            """
+            select first_doc_id, doc_ids, doc_boundaries
+            from position_doc_map
+            where field = ?
+            """,
+            [field],
+        )
+
+        for first_doc_id, doc_ids, doc_boundaries in partitions:
+            positions = BitMap()
+
+            for f in query_features:
+                f_positions = list(
+                    self.db.execute(
+                        "select positions from position_index where (first_doc_id, feature_id) = (?,?)",
+                        [first_doc_id, f],
+                    )
+                )
+
+                if f_positions:
+                    positions |= f_positions[0][0]
+
+            yield first_doc_id, positions, doc_ids, doc_boundaries
+
+    def _position_proximity_score(self, partition, positions, doc_ids, doc_boundaries):
+        if not positions:
+            return
+
+        end = -1
+
+        for position in positions:
+            if position > end:
+                if end >= 0:
+                    yield (doc, score)
+
+                # New doc, reset score
+                score = 0
+                rank = doc_boundaries.rank(position)
+                end = doc_boundaries[rank]
+                doc = doc_ids[rank]
+                last_position = None
+
+            if last_position:
+                score += 0.1 / (position - last_position)
+
+            last_position = position
+
+    @atomic()
     def intersect_queries_with_field(
         self, queries: dict[Hashable, AbstractBitMap], field: str
     ) -> tuple[list[Any], list[int], dict[Hashable, list[int]]]:
