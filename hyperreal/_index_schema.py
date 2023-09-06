@@ -14,7 +14,7 @@ database, associated with CURRENT_SCHEMA_VERSION.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 CURRENT_SCHEMA = f"""
     create table if not exists settings (
@@ -67,7 +67,8 @@ CURRENT_SCHEMA = f"""
         field text primary key,
         distinct_values integer,
         min_value,
-        max_value
+        max_value,
+        position_count
     );
 
     --------
@@ -189,6 +190,33 @@ migrations = {
         [],
     ),
     8: ([], []),
+    9: (
+        [
+            "alter table field_summary add column position_count",
+        ],
+        [
+            "delete from field_summary",
+            """
+            insert into field_summary
+            select
+                field,
+                count(*) as distinct_values,
+                min(value) as min_value,
+                max(value) as max_value,
+                coalesce(
+                    (
+                        select sum(position_count)
+                        from position_index
+                        inner join inverted_index using(feature_id)
+                        where field = ii.field
+                    ),
+                    0
+                )
+            from inverted_index ii
+            group by field
+            """,
+        ],
+    ),
 }
 
 

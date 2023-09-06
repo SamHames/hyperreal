@@ -18,15 +18,17 @@
                 <th>Cardinality</th>
                 <th>Minimum Value</th>
                 <th>Maximum Value</th>
+                <th>Positions Recorded</th>
             </tr>
         </thead>
         <tbody>
-            {% for field, granularity, min_value, max_value in field_summary %}
+            {% for field, granularity, min_value, max_value, position_count in field_summary %}
             <tr>
                 <td>{{ field }}</td>
                 <td>{{ granularity }}</td>
                 <td>{{ min_value }}</td>
                 <td>{{ max_value }}</td>
+                <td>{{ position_count }}</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -42,7 +44,7 @@
                 <li>
                     <label for="field_selection">Choose fields to include in the model:</label>
                     <select name="include_fields" id="field_selection" multiple>
-                        {% for field, _, _, _ in field_summary %}
+                        {% for field, _, _, _, _ in field_summary %}
                         <option value="{{ field }}">{{ field }}</option>
                         {% endfor %}
                     </select>

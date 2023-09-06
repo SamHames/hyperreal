@@ -516,8 +516,17 @@ class Index:
                     field,
                     count(*) as distinct_values,
                     min(value) as min_value,
-                    max(value) as max_value
-                from inverted_index
+                    max(value) as max_value,
+                    coalesce(
+                        (
+                            select sum(position_count)
+                            from position_index
+                            inner join inverted_index using(feature_id)
+                            where field = ii.field
+                        ),
+                        0
+                    )
+                from inverted_index ii
                 group by field
                 """
             )
@@ -584,78 +593,6 @@ class Index:
 
         for item in value_docs:
             yield item
-
-    @atomic()
-    def _or_partition_positions(self, features):
-        # Make sure that all of the features are from the same field.
-        fields_covered = set()
-        query_features = set()
-
-        for f in features:
-            if isinstance(f, int):
-                fields_covered.add(self.lookup_feature(f)[0])
-                query_features.add(f)
-            elif isinstance(f, tuple):
-                fields_covered.add(f[0])
-                query_features.add(self.lookup_feature_id(f))
-            else:
-                raise TypeError(f"Unsupported feature {f}.")
-
-        if len(fields_covered) != 1:
-            raise ValueError(
-                f"Positions are only valid for a single field. "
-                "Features are from the following fields: {fields_covered}."
-            )
-
-        field = fields_covered.pop()
-
-        partitions = self.db.execute(
-            """
-            select first_doc_id, doc_ids, doc_boundaries
-            from position_doc_map
-            where field = ?
-            """,
-            [field],
-        )
-
-        for first_doc_id, doc_ids, doc_boundaries in partitions:
-            positions = BitMap()
-
-            for f in query_features:
-                f_positions = list(
-                    self.db.execute(
-                        "select positions from position_index where (first_doc_id, feature_id) = (?,?)",
-                        [first_doc_id, f],
-                    )
-                )
-
-                if f_positions:
-                    positions |= f_positions[0][0]
-
-            yield first_doc_id, positions, doc_ids, doc_boundaries
-
-    def _position_proximity_score(self, partition, positions, doc_ids, doc_boundaries):
-        if not positions:
-            return
-
-        end = -1
-
-        for position in positions:
-            if position > end:
-                if end >= 0:
-                    yield (doc, score)
-
-                # New doc, reset score
-                score = 0
-                rank = doc_boundaries.rank(position)
-                end = doc_boundaries[rank]
-                doc = doc_ids[rank]
-                last_position = None
-
-            if last_position:
-                score += 0.1 / (position - last_position)
-
-            last_position = position
 
     @atomic()
     def intersect_queries_with_field(
@@ -2008,6 +1945,144 @@ class Index:
 
         return graph
 
+    @atomic()
+    def _or_partition_positions(self, features):
+        # Make sure that all of the features are from the same field.
+        fields_covered = set()
+        query_features = set()
+
+        for f in features:
+            if isinstance(f, int):
+                fields_covered.add(self.lookup_feature(f)[0])
+                query_features.add(f)
+            elif isinstance(f, tuple):
+                fields_covered.add(f[0])
+                query_features.add(self.lookup_feature_id(f))
+            else:
+                raise TypeError(f"Unsupported feature {f}.")
+
+    @atomic()
+    def score_passages(self, features, window_size, mode="best"):
+        """
+        Find passages containing the given set of features in all documents.
+
+        features is broken down by fields, and passages for all matching
+        fields are retrieved. Note that positions must have been indexed
+        for this to be useful. window_size is in the units of the underlying
+        position_window_size used at index time.
+
+        """
+
+        valid_modes = ["best", "all"]
+
+        if mode not in valid_modes:
+            raise ValueError(
+                f"Unknown passage retrieval {mode=}. Try one of {valid_modes=}."
+            )
+
+        # Make sure that all of the features are from the same field.
+        field_features = collections.defaultdict(set)
+        positional_fields = self.positional_fields
+
+        # Break down the list of features into fields
+        for f in features:
+            if isinstance(f, int):
+                field = self.lookup_feature(f)[0]
+
+                if field in positional_fields:
+                    field_features[field].add(f)
+
+            elif isinstance(f, tuple):
+                feature_id = self.lookup_feature_id(f)
+
+                if field in positional_fields:
+                    fields_features[f[0]].add(feature_id)
+            else:
+                raise TypeError(f"Unsupported feature {f}.")
+
+        futures = set()
+
+        for field, features in field_features.items():
+            for first_doc_id in self._field_partitions(field):
+                futures.add(
+                    self.pool.submit(
+                        _score_union_passages,
+                        self,
+                        field,
+                        first_doc_id,
+                        features,
+                        window_size,
+                        mode,
+                    )
+                )
+
+        passages = collections.defaultdict(list)
+        for future in cf.as_completed(futures):
+            field, _, scores = future.result()
+            passages[field].extend(scores)
+
+        return passages
+
+    def _field_partitions(self, field):
+        return [
+            r[0]
+            for r in self.db.execute(
+                """
+                select first_doc_id
+                from position_doc_map
+                where field = ?
+                """,
+                [field],
+            )
+        ]
+
+    @property
+    def positional_fields(self):
+        return {
+            r[0]
+            for r in self.db.execute(
+                "select field from field_summary where position_count > 0"
+            )
+        }
+
+    def _get_partition_positions(self, first_doc_id, feature_id):
+        positions = list(
+            self.db.execute(
+                """
+            select
+                positions
+            from position_index
+            where (feature_id, first_doc_id) = (?, ?)
+            """,
+                [feature_id, first_doc_id],
+            )
+        )
+        if positions:
+            return positions[0][0]
+        else:
+            return BitMap()
+
+    def _get_partition_header(self, field, first_doc_id):
+        header = list(
+            self.db.execute(
+                """
+                select
+                    docs_count,
+                    doc_ids,
+                    doc_boundaries
+                from position_doc_map
+                where (field, first_doc_id) = (?, ?)
+                """,
+                [field, first_doc_id],
+            )
+        )
+        if header:
+            return header[0]
+        else:
+            raise ValueError(
+                f"No position partition corresponding to {field=}, {first_doc_id=}"
+            )
+
 
 def _index_docs(
     corpus, doc_ids, doc_keys, temp_db_path, position_window_size, write_lock
@@ -2059,7 +2134,7 @@ def _index_docs(
                 if position_window_size and isinstance(
                     values, collections.abc.Sequence
                 ):
-                    batch_position = field_doc_position[field][1][-1]
+                    batch_position = field_doc_position[field][1][-1] + 1
 
                     # Make sure this is initilaised - values can be non-empty
                     # but only contain sentinels that generate no positions.
@@ -2078,7 +2153,7 @@ def _index_docs(
                         continue
                     else:
                         field_doc_position[field][0].add(doc_id)
-                        field_doc_position[field][1].add(position + batch_position + 1)
+                        field_doc_position[field][1].add(position + batch_position)
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -2402,3 +2477,179 @@ def _union_query(args):
             weight += len(docs)
 
     return query_key, query, weight
+
+
+def _bound_cluster_merge_scores(idx, cluster_id):
+    with idx:
+        docs, c, hits, features = list(
+            idx.db.execute(
+                """
+            select
+                doc_ids,
+                docs_count,
+                weight,
+                feature_count
+            from cluster where cluster_id=?
+            """,
+                [cluster_id],
+            )
+        )[0]
+
+        obj = hits / (c + features) - (hits / (hits + features))
+
+        check_bounds = idx.db.execute(
+            """
+            select
+                cluster_id,
+                weight,
+                feature_count,
+                (
+                    ((1.0 * weight) / (docs_count + feature_count)) -
+                    (1.0 * weight / (weight + feature_count))
+                ) as orig_obj,
+                (
+                    (
+                        (1.0 * weight + :hits) /
+                        (max(docs_count, :docs_count) + feature_count + :feature_count)
+                    ) -
+                    (
+                        (1.0 * weight + :hits) /
+                        (weight + :hits + feature_count + :feature_count)
+                    )
+                )
+                as merge_obj
+            from cluster where cluster_id > :cluster_id
+            order by merge_obj desc
+            """,
+            {
+                "cluster_id": cluster_id,
+                "hits": hits,
+                "feature_count": features,
+                "docs_count": c,
+            },
+        )
+
+        check_order = sorted(
+            (orig_obj + obj - merge_obj, cluster_id, orig_obj, weight, feature_count)
+            for cluster_id, weight, feature_count, orig_obj, merge_obj in check_bounds
+        )
+
+        best_merge = (math.inf, -1)
+
+        for (
+            max_merge_obj,
+            other_cluster_id,
+            orig_obj,
+            weight,
+            feature_count,
+        ) in check_order:
+            if max_merge_obj > best_merge[0]:
+                break
+
+            other_docs = idx.cluster_docs(other_cluster_id)
+            merge_docs = docs.union_cardinality(other_docs)
+
+            merge_obj = (weight + hits) / (merge_docs + features + feature_count) - (
+                weight + hits
+            ) / ((weight + hits) + features + feature_count)
+
+            delta = obj + orig_obj - merge_obj
+            best_merge = min(best_merge, (delta, other_cluster_id))
+
+        return best_merge
+
+
+def _partition_union_positions(idx, field, first_doc_id, features):
+    """
+    Take the union (OR) of the positions vectors for each of the given features.
+
+    Assumptions: all of the features are from the same field - this function
+    does not check or enforce this constraint though.
+
+    """
+
+    with idx:
+        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
+
+        positions = BitMap()
+
+        for f in features:
+            positions |= idx._get_partition_positions(first_doc_id, f)
+
+    return field, first_doc_id, positions, doc_ids, doc_boundaries
+
+
+def _score_passages(
+    field, first_doc_id, positions, doc_ids, doc_boundaries, window_size, mode
+):
+    if not positions:
+        return []
+
+    passage_scores = []
+
+    # Establish boundaries for the first doc
+    total_positions = len(positions)
+    first_position = positions[0]
+    rank = doc_boundaries.rank(first_position)
+    if rank == 0:
+        start = 0
+    else:
+        start = doc_boundaries[rank - 1]
+    end = doc_boundaries[rank]
+    doc_id = doc_ids[rank]
+    best_score = (0, 0, 0)
+
+    if mode == "best":
+        for i, pos in enumerate(positions):
+            if pos > end:
+                passage_scores.append((*best_score, doc_id))
+                rank = doc_boundaries.rank(pos)
+                start = doc_boundaries[rank - 1]
+                end = doc_boundaries[rank]
+                doc_id = doc_ids[rank]
+                best_score = (0, 0, 0)
+
+            # Find how many hits are in the window, and the location of the
+            # last hit - we can use this to construct windows and for further
+            # combinations of ranks later.
+            furthest_extent = positions.rank(min(end, pos + window_size))
+            last_hit = positions[furthest_extent - 1] - start
+
+            best_score = max(
+                best_score,
+                (furthest_extent - i, pos - start, last_hit),
+                # Note: break ties with the earlier position in the document
+                key=lambda x: (x[0], -x[1]),
+            )
+
+        passage_scores.append((*best_score, doc_id))
+
+    elif mode == "all":
+        for i, pos in enumerate(positions):
+            if pos > end:
+                rank = doc_boundaries.rank(pos)
+                start = doc_boundaries[rank - 1]
+                end = doc_boundaries[rank]
+                doc_id = doc_ids[rank]
+
+            furthest_extent = positions.rank(min(end, pos + window_size))
+            last_hit = positions[furthest_extent - 1] - start
+            passage_scores.append((furthest_extent - i, pos - start, last_hit, doc_id))
+    else:
+        raise ValueError(f"Unknown passage retrieval {mode=}")
+
+    return (
+        field,
+        first_doc_id,
+        passage_scores,
+    )
+
+
+def _score_union_passages(idx, field, first_doc_id, features, window_size, mode):
+    _, _, positions, doc_ids, doc_boundaries = _partition_union_positions(
+        idx, field, first_doc_id, features
+    )
+    _, _, scores = _score_passages(
+        field, first_doc_id, positions, doc_ids, doc_boundaries, window_size, mode
+    )
+    return field, first_doc_id, scores
