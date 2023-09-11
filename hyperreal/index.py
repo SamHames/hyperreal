@@ -1399,47 +1399,6 @@ class Index:
             top_k=top_k,
         )
 
-    def _create_subcluster(
-        self,
-        cluster_feature,
-        refine_parameters: Optional[dict] = None,
-        threads: int = 8,
-    ):
-        """
-        An extension to _refine_feature_groups that computes many feature_clusterings.
-
-        A small threadpool is created to manage running a couple of the
-        subclusterings in parallel - each required subclustering is performed
-        to completion in turn to ensure data locality.
-
-        """
-
-        refine_parameters = refine_parameters or {}
-
-        with cf.ThreadPoolExecutor(threads) as threadpool:
-            futures = []
-            cluster_order = []
-
-            for cluster_id, features in cluster_feature.items():
-                # TODO: skip small enough clusters.
-                target_clusters = math.ceil(len(features) ** 0.5)
-                refine_parameters["target_clusters"] = target_clusters
-                futures.append(
-                    threadpool.submit(
-                        self._refine_feature_groups,
-                        {cluster_id: features},
-                        **refine_parameters,
-                    )
-                )
-                cluster_order.append(cluster_id)
-
-            subclusters = {
-                cluster_id: f.result()[0]
-                for cluster_id, f in zip(cluster_order, futures)
-            }
-
-        return subclusters
-
     def _refine_feature_groups(
         self,
         cluster_feature: dict[int, set[int]],
@@ -2477,86 +2436,6 @@ def _union_query(args):
             weight += len(docs)
 
     return query_key, query, weight
-
-
-def _bound_cluster_merge_scores(idx, cluster_id):
-    with idx:
-        docs, c, hits, features = list(
-            idx.db.execute(
-                """
-            select
-                doc_ids,
-                docs_count,
-                weight,
-                feature_count
-            from cluster where cluster_id=?
-            """,
-                [cluster_id],
-            )
-        )[0]
-
-        obj = hits / (c + features) - (hits / (hits + features))
-
-        check_bounds = idx.db.execute(
-            """
-            select
-                cluster_id,
-                weight,
-                feature_count,
-                (
-                    ((1.0 * weight) / (docs_count + feature_count)) -
-                    (1.0 * weight / (weight + feature_count))
-                ) as orig_obj,
-                (
-                    (
-                        (1.0 * weight + :hits) /
-                        (max(docs_count, :docs_count) + feature_count + :feature_count)
-                    ) -
-                    (
-                        (1.0 * weight + :hits) /
-                        (weight + :hits + feature_count + :feature_count)
-                    )
-                )
-                as merge_obj
-            from cluster where cluster_id > :cluster_id
-            order by merge_obj desc
-            """,
-            {
-                "cluster_id": cluster_id,
-                "hits": hits,
-                "feature_count": features,
-                "docs_count": c,
-            },
-        )
-
-        check_order = sorted(
-            (orig_obj + obj - merge_obj, cluster_id, orig_obj, weight, feature_count)
-            for cluster_id, weight, feature_count, orig_obj, merge_obj in check_bounds
-        )
-
-        best_merge = (math.inf, -1)
-
-        for (
-            max_merge_obj,
-            other_cluster_id,
-            orig_obj,
-            weight,
-            feature_count,
-        ) in check_order:
-            if max_merge_obj > best_merge[0]:
-                break
-
-            other_docs = idx.cluster_docs(other_cluster_id)
-            merge_docs = docs.union_cardinality(other_docs)
-
-            merge_obj = (weight + hits) / (merge_docs + features + feature_count) - (
-                weight + hits
-            ) / ((weight + hits) + features + feature_count)
-
-            delta = obj + orig_obj - merge_obj
-            best_merge = min(best_merge, (delta, other_cluster_id))
-
-        return best_merge
 
 
 def _partition_union_positions(idx, field, first_doc_id, features):
