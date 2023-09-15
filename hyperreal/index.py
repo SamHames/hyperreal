@@ -1478,7 +1478,7 @@ class Index:
             split = {
                 feature
                 for feature in largest_cluster_features
-                if self.random.random() < 0.5
+                if self.random.random() < 0.5 and feature not in pinned_features
             }
             cluster_feature[new_cluster_id] = split
             cluster_feature[largest_cluster] -= split
