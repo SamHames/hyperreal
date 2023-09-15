@@ -279,7 +279,7 @@ def twittersphere_corpus_serve(corpus_db, index_db):
 
 @cli.command()
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-@click.option("--iterations", default=10)
+@click.option("--iterations", default=10, type=click.INT)
 @click.option(
     "--clusters",
     default=None,
@@ -309,10 +309,39 @@ def twittersphere_corpus_serve(corpus_db, index_db):
     "refinement will terminate early.",
 )
 @click.option(
+    "--move-acceptance-probability",
+    default=0.5,
+    type=click.FloatRange(0, 1),
+    help="The random chance of actually executing a possible move. "
+    "Smaller values will take more iterations to converge, large "
+    "values might be unstable.",
+)
+@click.option(
     "--random-seed",
     default=None,
     type=int,
     help="Specify a random seed for a model run. Best used with restart",
+)
+@click.option(
+    "--minimum-cluster-features",
+    default=1,
+    type=click.INT,
+    help="The minimum number of features in a cluster.",
+)
+@click.option(
+    "--group-test-batches",
+    default=None,
+    type=click.INT,
+    help="The number of grouped clusters to use to accelerate the clustering. "
+    "Set to 0 to disable the group hierarchy cluster optimisation. Leaving "
+    "at the default of None sets this to 0.1*clusters.",
+)
+@click.option(
+    "--group-test-top-k",
+    default=2,
+    type=click.INT,
+    help="The number of top groups to investigate if group-test-batches is enabled. "
+    "Testing more groups will take longer but find better solutions.",
 )
 def model(
     index_db,
@@ -323,6 +352,10 @@ def model(
     include_field,
     random_seed,
     tolerance,
+    move_acceptance_probability,
+    minimum_cluster_features,
+    group_test_batches,
+    group_test_top_k,
 ):
     """
     Create or refine a new feature cluster model on the given index.
@@ -367,7 +400,13 @@ def model(
 
     click.echo(f"Refining for {iterations} iterations on {index_db}.")
     doc_index.refine_clusters(
-        iterations=iterations, target_clusters=clusters, tolerance=tolerance
+        iterations=iterations,
+        target_clusters=clusters,
+        tolerance=tolerance,
+        move_acceptance_probability=move_acceptance_probability,
+        minimum_cluster_features=minimum_cluster_features,
+        group_test_batches=group_test_batches,
+        group_test_top_k=group_test_top_k,
     )
 
 

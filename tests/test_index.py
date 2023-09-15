@@ -151,8 +151,13 @@ def test_model_creation(pool, example_index_path, n_clusters):
     idx = hyperreal.index.Index(example_index_path, pool=pool)
 
     idx.initialise_clusters(n_clusters)
+    # The defaults will generate dense clustering for 4 clusters, hierarchical for 16, 64
     idx.refine_clusters(iterations=3)
 
+    assert len(idx.cluster_ids) == len(idx.top_cluster_features())
+    assert 1 < len(idx.cluster_ids) <= n_clusters
+
+    idx.refine_clusters(iterations=3, group_test_batches=0)
     assert len(idx.cluster_ids) == len(idx.top_cluster_features())
     assert 1 < len(idx.cluster_ids) <= n_clusters
 
