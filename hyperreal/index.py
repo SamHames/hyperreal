@@ -1371,7 +1371,7 @@ class Index:
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.05,
-        acceptance_probability: float = 0.5,
+        move_acceptance_probability: float = 0.5,
         group_test_batches: Optional[int] = None,
         group_test_top_k: int = 2,
     ) -> tuple[dict[int, set[int]], set[int]]:
@@ -1409,10 +1409,10 @@ class Index:
         converged if less than 5% of the features have moved during an
         iteration.
 
-        acceptance_probability: the probability a move that is estimated to
+        move_acceptance_probability: the probability a move that is estimated to
         improve the score will be accepted. This interacts with the top_k
         parameter - the top_k possible moves will be processed in order from
-        best move to worst move. A lower acceptance_probability and a larger
+        best move to worst move. A lower move_acceptance_probability and a larger
         top_k result in less greedy exploration of the solution space.
 
         top_k: the number of nearest neighbour clusters to consider as move
@@ -1539,7 +1539,7 @@ class Index:
                 _, to_cluster = best_moves[feature_id][0]
                 current_cluster = feature_cluster[feature_id]
 
-                accept = self.random.random() < acceptance_probability
+                accept = self.random.random() < move_acceptance_probability
 
                 # Handle dissolving clusters
                 if current_cluster in dissolve_cluster_ids:
@@ -1603,7 +1603,7 @@ class Index:
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.05,
-        acceptance_probability: float = 0.5,
+        move_acceptance_probability: float = 0.5,
         group_test_batches: Optional[int] = None,
         group_test_top_k: int = 2,
     ):
@@ -1672,7 +1672,7 @@ class Index:
             tolerance=tolerance,
             group_test_top_k=group_test_top_k,
             group_test_batches=group_test_batches,
-            acceptance_probability=acceptance_probability,
+            move_acceptance_probability=move_acceptance_probability,
         )
 
         # Map new_cluster_ids generated to actual globally unique IDs.
