@@ -162,7 +162,8 @@ def plaintext_corpus_serve(corpus_db, index_db):
             corpus_args=[corpus_db],
             pool=pool,
         )
-        hyperreal.server.launch_web_server(index_server)
+        engine = hyperreal.server.launch_web_server(index_server)
+        engine.block()
 
 
 plaintext_corpus.command(name="index")(
@@ -230,7 +231,8 @@ def stackexchange_corpus_serve(corpus_db, index_db):
             corpus_args=[corpus_db],
             pool=pool,
         )
-        hyperreal.server.launch_web_server(index_server)
+        engine = hyperreal.server.launch_web_server(index_server)
+        engine.block()
 
 
 stackexchange_corpus.command(name="sample")(
@@ -274,7 +276,8 @@ def twittersphere_corpus_serve(corpus_db, index_db):
             corpus_args=[corpus_db],
             pool=pool,
         )
-        hyperreal.server.launch_web_server(index_server)
+        engine = hyperreal.server.launch_web_server(index_server)
+        engine.block()
 
 
 @cli.command()
@@ -495,4 +498,5 @@ def serve(index_db):
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
         index_server = hyperreal.server.SingleIndexServer(index_db, pool=pool)
-        hyperreal.server.launch_web_server(index_server)
+        engine = hyperreal.server.launch_web_server(index_server)
+        engine.block()

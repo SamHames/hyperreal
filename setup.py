@@ -13,7 +13,7 @@ requires = [
     "networkx>=3.0.0",
 ]
 
-extras = {"test": ["pytest", "black", "tox"], "stackexchange": ["lxml"]}
+extras = {"test": ["pytest", "black", "tox", "requests"], "stackexchange": ["lxml"]}
 
 
 setup(
