@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import uuid
 
+from lxml import html
 import pytest
 import requests
 
@@ -36,6 +37,8 @@ def server(tmp_path):
         engine.exit()
 
 
+# Parametrise this for all of the index types to make life easier.
+# This will also help test more of the functionality related to the corpus.
 def test_index_server_no_corpus(server):
     """
     Start an index only server in the background using the CLI.
@@ -46,3 +49,33 @@ def test_index_server_no_corpus(server):
 
     r = requests.get(server)
     r.raise_for_status()
+
+    # There should be an index listing in there somewhere
+    doc = html.document_fromstring(r.content)
+    links = [l.attrib["href"] for l in doc.findall(".//a")]
+
+    assert "/index/0" in links
+
+    r = requests.get(server + "/index/0")
+    r.raise_for_status()
+
+    doc = html.document_fromstring(r.content)
+    links = {l.attrib["href"] for l in doc.findall(".//a")}
+    must_be_present = {
+        "/index/0/cluster/1",
+        "/index/0/?cluster_id=1",
+        "/index/0/details",
+    }
+
+    assert len(links & must_be_present) == len(must_be_present)
+
+    for l in links:
+        if l.startswith("/index/0/?feature_id="):
+            must_be_present.add(l)
+            break
+    else:
+        raise ValueError("Missing a feature_id link")
+
+    for test_link in must_be_present:
+        r = requests.get(server + test_link)
+        r.raise_for_status()

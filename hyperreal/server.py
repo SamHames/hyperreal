@@ -640,5 +640,7 @@ def launch_web_server(index_server, auto_reload=False, port=8080):
 
     cherrypy.engine.signals.subscribe()
     cherrypy.engine.start()
+    # Make sure to actually wait for everything to be started.
+    cherrypy.engine.wait(cherrypy.engine.states.STARTED)
 
     return cherrypy.engine
