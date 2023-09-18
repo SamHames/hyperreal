@@ -595,8 +595,10 @@ class SingleIndexServer:
         }
 
 
-def launch_web_server(index_server, auto_reload=False):
+def launch_web_server(index_server, auto_reload=False, port=8080):
     """Launch the web server using the given instance of an index server."""
+
+    cherrypy.config.update({"server.socket_port": port})
 
     if not auto_reload:
         cherrypy.config.update(
@@ -638,4 +640,7 @@ def launch_web_server(index_server, auto_reload=False):
 
     cherrypy.engine.signals.subscribe()
     cherrypy.engine.start()
-    cherrypy.engine.block()
+    # Make sure to actually wait for everything to be started.
+    cherrypy.engine.wait(cherrypy.engine.states.STARTED)
+
+    return cherrypy.engine

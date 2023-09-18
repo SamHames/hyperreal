@@ -1,7 +1,9 @@
 # .coveragerc to control coverage.py
 [run]
 branch = True
-concurrency = multiprocessing
+concurrency =
+    multiprocessing
+    thread
 parallel = True
 command_line  = -m pytest
 
@@ -22,4 +24,4 @@ exclude_lines =
     # Don't complain about abstract methods, they aren't run:
     @(abc\.)?abstractmethod
 
-fail_under = 72
+fail_under = 80

@@ -49,18 +49,31 @@ def test_plaintext_corpus(tmp_path):
     )
     assert result.exit_code == 0
 
-    # Model
+    args = [
+        "--iterations",
+        "10",
+        "--clusters",
+        "10",
+        "--min-docs",
+        "10",
+        str(target_index_db),
+    ]
+
+    # Model - empty case
+    result = runner.invoke(cli.model, args)
+
+    assert result.exit_code == 0
+
+    # Repeat the model, should error as a model already exists
+    result = runner.invoke(cli.model, args + ["--restart"])
+
+    assert result.exit_code == 1
+
+    # Restart the model with confirmation
     result = runner.invoke(
         cli.model,
-        [
-            "--iterations",
-            "10",
-            "--clusters",
-            "10",
-            "--min-docs",
-            "10",
-            str(target_index_db),
-        ],
+        args + ["--restart"],
+        input="Y",
     )
 
     assert result.exit_code == 0
