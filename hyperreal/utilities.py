@@ -269,3 +269,17 @@ def approximate_positions_with_sentinels(values, position_window_size):
         if current_size == position_window_size:
             current_position += 1
             current_size = 0
+
+
+def expand_bitmap_window(bitmap, window_size):
+    """Expand the ones in a bitmap by window_size in each direction."""
+    shift = 1
+    remaining = window_size - 1
+    windowed = bitmap | bitmap.shift(shift)
+    while remaining * 2 > window_size:
+        shift *= 2
+        windowed |= windowed.shift(shift)
+        remaining -= shift
+    windowed |= windowed.shift(remaining)
+    windowed |= windowed.shift(-window_size)
+    return windowed
