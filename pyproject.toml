@@ -34,8 +34,8 @@ Repository = "https://github.com/SamHames/hyperreal/"
 [project.scripts]
 hyperreal = "hyperreal.cli:cli"
 
-[tool.setuptools]
-package-dir = {"" = "hyperreal"}
+[tool.setuptools.packages]
+find = {}
 
 [build-system]
 requires = ["setuptools>=64.0", "setuptools-scm>=8.0"]
