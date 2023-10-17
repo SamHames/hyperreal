@@ -43,9 +43,9 @@ plain_text_tokenizer = regex.compile(
 )
 
 
-def social_media_tokens(entry):
+def social_media_tokens(text):
     cleaned = social_media_cleaner.sub(
-        "", entry.translate(curly_quote_translator).lower()
+        "", text.translate(curly_quote_translator).lower()
     )
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
     # This is a terminator token, to make sure that collocations aren't
@@ -54,12 +54,32 @@ def social_media_tokens(entry):
     return tokens
 
 
-def tokens(entry):
-    cleaned = entry.lower()
+def tokens(text):
+    cleaned = text.lower()
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
     # This is a terminator token, to make sure that collocations aren't
     # identified across textual boundaries.
     tokens.append(None)
+    return tokens
+
+
+def display_tokens(text):
+    """
+    A version of display that keeps the entire context of a token.
+
+    This skips lowercasing and removal of whitespace between tokens and
+    allows working with the original text.
+
+    """
+    tokens = []
+    token_start = 0
+
+    for group in word_tokenizer.finditer(text):
+        span = group.span()
+        if test_string[token_start : span[1]].strip():
+            tokens.append(test_string[token_start : span[1]])
+            token_start = span[1]
+
     return tokens
 
 
@@ -207,79 +227,42 @@ def weight_bitslice(bitslice):
         yield key, sum(g[1] for g in group)
 
 
-def approximate_positions_with_sentinels(values, position_window_size):
+def expand_positions_window(positions, doc_boundaries, window_size):
     """
-    Turn a Sequence of values into a generator of (position_bucket, value).
+    Symmetrically expand the ones in a bitmap of positions by window_size.
 
-    This function handles None as sentinel values to enforce position breaks
-    and the rounding of position values.
-
-    Examples:
-
-    This is position_window_size = 1, which is the exact position case.
-
-    >>> list(approximate_positions_with_sentinels(['the', 'cat', 'sat'], 1))
-    [(0, 'the'), (1, 'cat'), (2, 'sat')]
-
-    Approximate positions (position_window_size > 1) accumulate multiple
-    values into the same position as in the following examples for 2, 3:
-
-    >>> list(approximate_positions_with_sentinels(['the', 'cat', 'sat'], 2))
-    [(0, 'the'), (0, 'cat'), (1, 'sat')]
-
-    >>> values = "the cat sat on the mat".split()
-    >>> list(approximate_positions_with_sentinels(values, 3))
-    [(0, 'the'), (0, 'cat'), (0, 'sat'), (1, 'on'), (1, 'the'), (1, 'mat')]
-
-    'None' values are sentinel markers to terminate the position bucket
-    earlier. This can be used to control breaking more finely in a stream
-    of tokens than would otherwise be possible.
-
-    >>> values.insert(3, None)
-    >>> list(approximate_positions_with_sentinels(values, 2))
-    [(0, 'the'), (0, 'cat'), (1, 'sat'), (2, 'on'), (2, 'the'), (3, 'mat')]
-
-    Lastly a negative position value only changes position at sentinel None's.
-    This allows you to control everything about the procedure.
-
-    >>> list(approximate_positions_with_sentinels(values, -2))
-    [(0, 'the'), (0, 'cat'), (0, 'sat'), (1, 'on'), (1, 'the'), (1, 'mat')]
+    Takes into account the document boundaries.
 
     """
 
-    current_position = 0
-    current_size = 0
+    if not positions:
+        return BitMap()
 
-    for value in values:
-        if value is None:
-            # If we've placed anything in the current bucket, we
-            # need to advance the position counter - otherwise
-            # we can just keep advancing. This turns consecutive
-            # sentinels into a single sentinel.
-            if current_size:
-                current_position += 1
-                current_size = 0
+    windowed = positions.copy()
 
-            continue
+    current_position = positions[0]
+    rank = doc_boundaries.rank(current_position)
+    if rank == 0:
+        doc_start = 0
+    else:
+        doc_start = doc_boundaries[rank - 1]
+    doc_end = doc_boundaries[rank]
+    final_position = positions[-1]
 
-        current_size += 1
+    while 1:
+        if current_position > doc_end:
+            # reset the document we're currently in
+            rank = doc_boundaries.rank(current_position)
+            doc_start = doc_boundaries[rank - 1]
+            doc_end = doc_boundaries[rank]
 
-        yield (current_position, value)
+        # Actually apply the window
+        end_range = min(doc_end, current_position + window_size) + 1
+        windowed.add_range(max(doc_start, current_position - window_size), end_range)
 
-        if current_size == position_window_size:
-            current_position += 1
-            current_size = 0
+        if end_range > final_position:
+            break
 
+        current_position = positions.next_set_bit(end_range)
 
-def expand_bitmap_window(bitmap, window_size):
-    """Expand the ones in a bitmap by window_size in each direction."""
-    shift = 1
-    remaining = window_size - 1
-    windowed = bitmap | bitmap.shift(shift)
-    while remaining * 2 > window_size:
-        shift *= 2
-        windowed |= windowed.shift(shift)
-        remaining -= shift
-    windowed |= windowed.shift(remaining)
-    windowed |= windowed.shift(-window_size)
     return windowed

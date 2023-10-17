@@ -1838,23 +1838,15 @@ class Index:
                 raise TypeError(f"Unsupported feature {f}.")
 
     @atomic()
-    def score_passages_dnf(self, field, feature_clauses, window_size, mode="best"):
+    def score_passages_dnf(self, field, feature_clauses, window_size):
         """
         Find passages containing the given set of features in all documents.
 
         features is broken down by fields, and passages for all matching
         fields are retrieved. Note that positions must have been indexed
-        for this to be useful. window_size is in the units of the underlying
-        position_window_size used at index time.
+        for this to be useful.
 
         """
-
-        valid_modes = ["best", "all"]
-
-        if mode not in valid_modes:
-            raise ValueError(
-                f"Unknown passage retrieval {mode=}. Try one of {valid_modes=}."
-            )
 
         # Make sure that all of the features are from the same field.
         field_features = collections.defaultdict(set)
@@ -1872,7 +1864,6 @@ class Index:
                     first_doc_id,
                     feature_clauses,
                     window_size,
-                    mode,
                 )
             )
 
@@ -1882,6 +1873,41 @@ class Index:
             passages[field].extend(scores)
 
         return passages
+
+    @atomic()
+    def count_collocations(self, field, features, window_size):
+        """
+        Count collocations near the given query of positions.
+
+        """
+        # TODO: Validate clauses are all from the same field.
+        futures = set()
+
+        for first_doc_id in self._field_partitions(field):
+            futures.add(
+                self.pool.submit(
+                    _count_collocations,
+                    self,
+                    field,
+                    first_doc_id,
+                    features,
+                    window_size,
+                )
+            )
+
+        collocations = collections.defaultdict(lambda: [0, 0])
+        total_query = 0
+        total_window = 0
+
+        for future in cf.as_completed(futures):
+            counts, query_hits, window_hits = future.result()
+            total_query += query_hits
+            total_window += window_hits
+
+            for feature_id, count, feature_count in counts:
+                collocations[feature_id][0] += count
+                collocations[feature_id][1] += feature_count
+        return collocations, total_query, total_window
 
     def _field_partitions(self, field):
         return [
@@ -1953,21 +1979,9 @@ class Index:
             )
 
 
-def _index_docs(
-    corpus, doc_ids, doc_keys, temp_db_path, position_window_size, write_lock
-):
+def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_lock):
     """
     Index all of the given docs into temp_db_path.
-
-    position_window_size has two modes:
-
-    0 - disabled, no position information will be recorded.
-    > 0 - approximate position windows of the given half width will be
-      created. Coocurrence of values can be found exactly up to 2 *
-      position_window_size - note that edge effects mean that the position
-      windows will miss cooccurence across window boundaries which is why the
-      limit is 2*position_window_size not position_window_size. Note that
-      setting this to 1 computes an exact position index.
 
     """
 
@@ -2000,25 +2014,16 @@ def _index_docs(
                 # Only record position information if there is a
                 # position_window_size set, and the field is an ordered
                 # sequence type.
-                if position_window_size and isinstance(
-                    values, collections.abc.Sequence
-                ):
+                if index_positions and isinstance(values, collections.abc.Sequence):
                     batch_position = field_doc_position[field][1][-1] + 1
 
-                    # Make sure this is initilaised - values can be non-empty
-                    # but only contain sentinels that generate no positions.
-                    position = None
-
-                    position_values = utilities.approximate_positions_with_sentinels(
-                        values, position_window_size
-                    )
-
-                    for position, value in position_values:
+                    for position, value in enumerate(values):
+                        if value is None:
+                            raise ValueError("Values cannot contain None")
                         batch[field][value][1].add(position + batch_position)
 
-                    # Record offset for the start of the next positions in this
-                    # field for this batch.
-                    if position is None:
+                    # If values is empty, move on to the next layer.
+                    if not values:
                         continue
                     else:
                         field_doc_position[field][0].add(doc_id)
@@ -2316,93 +2321,7 @@ def _union_query(args):
     return query_key, query, weight
 
 
-def _partition_union_positions(idx, field, first_doc_id, features):
-    """
-    Take the union (OR) of the positions vectors for each of the given features.
-
-    Assumptions: all of the features are from the same field - this function
-    does not check or enforce this constraint though.
-
-    """
-
-    with idx:
-        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
-
-        positions = BitMap()
-
-        for f in features:
-            positions |= idx._get_partition_positions(first_doc_id, f)
-
-    return field, first_doc_id, positions, doc_ids, doc_boundaries
-
-
-def _score_passages(
-    field, first_doc_id, positions, doc_ids, doc_boundaries, window_size, mode
-):
-    if not positions:
-        return []
-
-    passage_scores = []
-
-    # Establish boundaries for the first doc
-    total_positions = len(positions)
-    first_position = positions[0]
-    rank = doc_boundaries.rank(first_position)
-    if rank == 0:
-        start = 0
-    else:
-        start = doc_boundaries[rank - 1]
-    end = doc_boundaries[rank]
-    doc_id = doc_ids[rank]
-    best_score = (0, 0, 0)
-
-    if mode == "best":
-        for i, pos in enumerate(positions):
-            if pos > end:
-                passage_scores.append((*best_score, doc_id))
-                rank = doc_boundaries.rank(pos)
-                start = doc_boundaries[rank - 1]
-                end = doc_boundaries[rank]
-                doc_id = doc_ids[rank]
-                best_score = (0, 0, 0)
-
-            # Find how many hits are in the window, and the location of the
-            # last hit - we can use this to construct windows and for further
-            # combinations of ranks later.
-            furthest_extent = positions.rank(min(end, pos + window_size))
-            last_hit = positions[furthest_extent - 1] - start
-
-            best_score = max(
-                best_score,
-                (furthest_extent - i, pos - start, last_hit),
-                # Note: break ties with the earlier position in the document
-                key=lambda x: (x[0], -x[1]),
-            )
-
-        passage_scores.append((*best_score, doc_id))
-
-    elif mode == "all":
-        for i, pos in enumerate(positions):
-            if pos > end:
-                rank = doc_boundaries.rank(pos)
-                start = doc_boundaries[rank - 1]
-                end = doc_boundaries[rank]
-                doc_id = doc_ids[rank]
-
-            furthest_extent = positions.rank(min(end, pos + window_size))
-            last_hit = positions[furthest_extent - 1] - start
-            passage_scores.append((furthest_extent - i, pos - start, last_hit, doc_id))
-    else:
-        raise ValueError(f"Unknown passage retrieval {mode=}")
-
-    return (
-        field,
-        first_doc_id,
-        passage_scores,
-    )
-
-
-def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size, mode):
+def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
     """
     Score passages for a query in disjunctive normal form.
 
@@ -2429,12 +2348,18 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size, 
             clause_weights.append((weight, clause))
 
         clause_weights.sort()
+        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
 
         # Process the first clause to initialise everything
         positions = idx._union_position_query(first_doc_id, clause_weights[0][1])
-        valid_window = utilities.expand_bitmap_window(positions, window_size)
+        valid_window = utilities.expand_positions_window(
+            positions, doc_boundaries, window_size
+        )
 
         for _, clause in clause_weights[1:]:
+            # Keep only the union positions that actually intersect with the
+            # existing window - these are the starts and ends of spans that
+            # can satisfy the spacing criteria.
             clause_positions = (
                 idx._union_position_query(first_doc_id, clause) & valid_window
             )
@@ -2443,69 +2368,76 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size, 
             if not clause_positions:
                 return []
 
-            # TODO: handle document boundaries, because this can match over
-            # them.
+            # Keep the remaining positions so we can count them as matching
             positions |= clause_positions
-            valid_window &= utilities.expand_bitmap_window(
-                clause_positions, window_size
+
+            # Update the windows by intersecting with the new valid windows
+            # from this clause.
+            valid_window &= utilities.expand_positions_window(
+                clause_positions, doc_boundaries, window_size
             )
 
+        # Apply the final valid window to the positions.
         positions &= valid_window
-        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
+        valid_window.run_optimize()
 
         passage_scores = []
 
+        # Walk through the positions and check against valid_window to find passages.
         # Establish boundaries for the first doc
-        first_position = positions[0]
-        rank = doc_boundaries.rank(first_position)
+        passage_start = last_position = positions[0]
+        rank = doc_boundaries.rank(passage_start)
+
         if rank == 0:
-            start = 0
+            doc_start = 0
         else:
-            start = doc_boundaries[rank - 1]
-        end = doc_boundaries[rank]
+            doc_start = doc_boundaries[rank - 1]
+
+        doc_end = doc_boundaries[rank]
         doc_id = doc_ids[rank]
-        best_score = (0, 0, 0)
 
-        if mode == "best":
-            for i, pos in enumerate(positions):
-                if pos > end:
-                    passage_scores.append((*best_score, doc_id))
-                    rank = doc_boundaries.rank(pos)
-                    start = doc_boundaries[rank - 1]
-                    end = doc_boundaries[rank]
-                    doc_id = doc_ids[rank]
-                    best_score = (0, 0, 0)
-
-                # Find how many hits are in the window, and the location of the
-                # last hit - we can use this to construct windows and for further
-                # combinations of ranks later.
-                furthest_extent = positions.rank(min(end, pos + window_size + 1))
-                last_hit = positions[furthest_extent - 1] - start
-
-                best_score = max(
-                    best_score,
-                    (furthest_extent - i, pos - start, last_hit),
-                    # Note: break ties with the earlier position in the document
-                    key=lambda x: (x[0], -x[1]),
-                )
-
-            passage_scores.append((*best_score, doc_id))
-
-        elif mode == "all":
-            for i, pos in enumerate(positions):
-                if pos > end:
-                    rank = doc_boundaries.rank(pos)
-                    start = doc_boundaries[rank - 1]
-                    end = doc_boundaries[rank]
-                    doc_id = doc_ids[rank]
-
-                furthest_extent = positions.rank(min(end, pos + window_size))
-                last_hit = positions[furthest_extent - 1] - start
+        for position in positions[1:]:
+            if position > doc_end:
+                # End passage and move on to next document
                 passage_scores.append(
-                    (furthest_extent - i, pos - start, last_hit, doc_id)
+                    (
+                        positions.range_cardinality(passage_start, last_position + 1),
+                        passage_start - doc_start,
+                        last_position - doc_start,
+                        doc_id,
+                    )
                 )
+                passage_start = last_position = position
+                rank = doc_boundaries.rank(position)
+                doc_start = doc_boundaries[rank - 1]
+                doc_end = doc_boundaries[rank]
+                doc_id = doc_ids[rank]
+
+            elif position - last_position > window_size:
+                # Immediately end the passage, don't need to check valid_window
+                passage_scores.append(
+                    (
+                        positions.range_cardinality(passage_start, last_position + 1),
+                        passage_start - doc_start,
+                        last_position - doc_start,
+                        doc_id,
+                    )
+                )
+                passage_start = last_position = position
+
+            else:
+                last_position = position
         else:
-            raise ValueError(f"Unknown passage retrieval {mode=}")
+            # Don't forget the last window, if it wasn't closed off.
+            if last_position != passage_start:
+                passage_scores.append(
+                    (
+                        positions.range_cardinality(passage_start, last_position + 1),
+                        passage_start - doc_start,
+                        last_position - doc_start,
+                        doc_id,
+                    )
+                )
 
     return (
         field,
@@ -2514,11 +2446,30 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size, 
     )
 
 
-def _score_union_passages(idx, field, first_doc_id, features, window_size, mode):
-    _, _, positions, doc_ids, doc_boundaries = _partition_union_positions(
-        idx, field, first_doc_id, features
-    )
-    _, _, scores = _score_passages(
-        field, first_doc_id, positions, doc_ids, doc_boundaries, window_size, mode
-    )
-    return field, first_doc_id, scores
+def _count_collocations(idx, field, first_doc_id, features, window_size):
+    """
+    Count collocations of all of the given features up to window_size positions away.
+
+    """
+
+    features = set(features)
+
+    with idx:
+        counts = []
+        positions = idx._union_position_query(first_doc_id, features)
+        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
+        valid_window = utilities.expand_positions_window(
+            positions, doc_boundaries, window_size
+        )
+
+        for (feature_id,) in idx.db.execute(
+            "select feature_id from position_index where first_doc_id = ?",
+            [first_doc_id],
+        ):
+            if feature_id not in features:
+                other_positions = idx._get_partition_positions(first_doc_id, feature_id)
+                if other_positions:
+                    count = valid_window.intersection_cardinality(other_positions)
+                    counts.append((feature_id, count, len(other_positions)))
+
+    return counts, len(positions), len(valid_window)
