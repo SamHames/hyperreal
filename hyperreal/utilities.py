@@ -33,33 +33,47 @@ social_media_cleaner = regex.compile(
     r"(?:https?://|#|@).*?(?=(?:\s|$))"
 )
 
-plain_text_tokenizer = regex.compile(
-    # Note this handles 'quoted' words a little weirdly: 'orange' is tokenised
-    # as ["orange", "'"] I'd prefer to tokenise this as p"'", "orange", "'"]
-    # but the regex library behaves weirdly. So for now phrase search for
-    # quoted strings won't work.
-    r"\b\p{Word_Break=WSegSpace}*'?",
-    flags=regex.WORD | regex.UNICODE | regex.V1,
-)
-
 
 def social_media_tokens(text):
     cleaned = social_media_cleaner.sub(
         "", text.translate(curly_quote_translator).lower()
     )
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
-    # This is a terminator token, to make sure that collocations aren't
-    # identified across textual boundaries.
-    tokens.append(None)
     return tokens
 
 
 def tokens(text):
     cleaned = text.lower()
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
-    # This is a terminator token, to make sure that collocations aren't
-    # identified across textual boundaries.
-    tokens.append(None)
+    return tokens
+
+
+def presentable_tokens(text):
+    """
+    A version of `tokens` suitable for presentation use cases.
+
+    This produces the same number of tokens as tokens, but does not alter
+    the display properties of the text. For example:
+
+    >>> tokens("The cat sat on the mat!")
+    ["the", "cat", "sat", "on", "the", "mat", "!"]
+
+    >>> presentable_tokens("The cat, he sat on the mat!")
+    ["The ", "cat", "he", ", ", "sat ", "on ", "the ", "mat", "!"]
+    """
+    tokens = []
+    whitespace = word_tokenizer.finditer(text)
+
+    token_start = 0
+    last_end = 0
+    for gap in whitespace:
+        start, end = gap.span()
+        if start > token_start and end > last_end:
+            tokens.append(text[token_start:end])
+            token_start = end
+
+        last_end = end
+
     return tokens
 
 
