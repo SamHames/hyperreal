@@ -56,16 +56,16 @@ def presentable_tokens(text):
     the display properties of the text. For example:
 
     >>> tokens("The cat sat on the mat!")
-    ["the", "cat", "sat", "on", "the", "mat", "!"]
+    ['the', 'cat', 'sat', 'on', 'the', 'mat', '!']
 
     >>> presentable_tokens("The cat, he sat on the mat!")
-    ["The ", "cat", "he", ", ", "sat ", "on ", "the ", "mat", "!"]
+    ['The ', 'cat', ', ', 'he ', 'sat ', 'on ', 'the ', 'mat', '!']
     """
     tokens = []
     whitespace = word_tokenizer.finditer(text)
 
     token_start = 0
-    last_end = 0
+    last_whitespace_end = 0
     for gap in whitespace:
         start, end = gap.span()
         if start > token_start and end > last_end:

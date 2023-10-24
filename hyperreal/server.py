@@ -328,33 +328,43 @@ class Index:
         exemplar_docs="5",
         top_k_features="40",
         scoring="jaccard",
+        result_type=None,
     ):
         template = templates.get_template("index.html")
 
-        rendered_docs = []
+        search_results = []
         total_docs = 0
         query = None
         highlight_cluster_id = None
         highlight_feature_id = None
         concordances = False
 
+        # Get the default result type from the index.
+        # TODO: this should come from the corpus as a suggestion?
+        # Or otherwise sniff the supported types to work it out?
+        result_type = cherrypy.request.index.settings["display_query_results"]
+
         # Redirect to the index overview page to create a new model if no
         # index has been created.
         if not cherrypy.request.index.cluster_ids:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
 
+        passage_query = []
+
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
             highlight_feature_id = int(feature_id)
             concordance_features = [highlight_feature_id]
+            passage_query.append([highlight_feature_id])
 
         elif cluster_id is not None:
             query = cherrypy.request.index.cluster_docs(int(cluster_id))
             highlight_cluster_id = int(cluster_id)
-            concordance_features = [
-                f[1:3]
-                for f in cherrypy.request.index.cluster_features(highlight_cluster_id)
-            ]
+            cluster_features = cherrypy.request.index.cluster_features(
+                highlight_cluster_id
+            )
+            concordance_features = [f[1:3] for f in cluster_features]
+            passage_query.append([f[0] for f in cluster_features])
 
         if query:
             clusters = cherrypy.request.index.pivot_clusters_by_query(
@@ -362,12 +372,8 @@ class Index:
             )
 
             if cherrypy.request.index.corpus is not None:
-                concordances = (
-                    cherrypy.request.index.settings["display_query_results"]
-                    == "concordance"
-                )
-                if concordances:
-                    rendered_docs = list(
+                if result_type == "concordance":
+                    search_results = list(
                         cherrypy.request.index.concordances(
                             query,
                             concordance_features,
@@ -375,8 +381,18 @@ class Index:
                             random_sample_size=int(exemplar_docs),
                         )
                     )
+                if result_type == "passage":
+                    passages = cherrypy.request.index.score_passages_dnf(
+                        "speech", passage_query, 25
+                    )
+                    search_results = list(
+                        cherrypy.request.index.render_passages_table(
+                            passages, random_sample_size=int(exemplar_docs)
+                        )
+                    )
+                    print(search_results)
                 else:
-                    rendered_docs = cherrypy.request.index.render_docs_html(
+                    search_results = cherrypy.request.index.render_docs_html(
                         query, random_sample_size=int(exemplar_docs)
                     )
 
@@ -393,7 +409,8 @@ class Index:
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
-            rendered_docs=rendered_docs,
+            search_results=search_results,
+            result_type=result_type,
             concordances=concordances,
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that

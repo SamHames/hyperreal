@@ -54,8 +54,7 @@ def check_alice():
         target_positions = 0
         for d in docs:
             target_docs += 1
-            # Note, exclude the None sentinel at the end.
-            target_nnz += len(set(hyperreal.utilities.tokens(d)[:-1]))
+            target_nnz += len(set(hyperreal.utilities.tokens(d)))
             target_positions += sum(
                 1 for v in hyperreal.utilities.tokens(d) if v is not None
             )

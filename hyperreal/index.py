@@ -12,6 +12,7 @@ import concurrent.futures as cf
 import csv
 from functools import wraps
 import heapq
+import itertools
 import logging
 import math
 import multiprocessing as mp
@@ -179,7 +180,7 @@ class Index:
             row[0]: row[1] for row in self.db.execute("select key, value from settings")
         }
 
-        self.settings["display_query_results"] = "display"
+        self.settings["display_query_results"] = "passage"
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -560,16 +561,25 @@ class Index:
         self.logger.info("Indexing completed.")
 
     @atomic()
-    def convert_query_to_keys(self, query):
-        """Generate the doc_keys one by one for the given query."""
+    def convert_query_to_keys(self, query) -> dict[Hashable, int]:
+        """
+        Return a mapping of doc_keys to their doc_id.
 
+        This can be passed directly to corpus objects to retrieve matching
+        docs.
+
+        """
+
+        key_docs = {}
         for doc_id in query:
             doc_key = list(
                 self.db.execute(
                     "select doc_key from doc_key where doc_id = ?", [doc_id]
                 )
             )[0][0]
-            yield doc_key
+            key_docs[doc_key] = doc_id
+
+        return key_docs
 
     @atomic()
     def iter_field_docs(self, field, min_docs=1):
@@ -627,7 +637,8 @@ class Index:
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
-        return self.corpus.docs(doc_keys=keys)
+        for key, doc in self.corpus.docs(doc_keys=sorted(keys)):
+            yield keys[key], key, doc
 
     @requires_corpus(corpus.BaseCorpus)
     @atomic()
@@ -662,7 +673,7 @@ class Index:
 
             field_features[field].add(value)
 
-        for doc_id, (doc_key, doc) in zip(query, self.docs(query)):
+        for doc_id, doc_key, doc in self.docs(query):
             indexed = self.corpus.index(doc)
 
             doc_cooccurrence = dict()
@@ -736,6 +747,48 @@ class Index:
 
         else:
             return bitmap.copy()
+
+    @requires_corpus(corpus.BaseCorpus)
+    @atomic()
+    def render_passages_table(
+        self, scored_passages, window_size=20, batch_size=1000, random_sample_size=None
+    ):
+        """
+        Render a table of passages from the associated documents.
+
+        """
+
+        if random_sample_size is not None:
+            keep_keys = heapq.nlargest(
+                random_sample_size,
+                ((self.random.random(), doc_id) for doc_id in scored_passages.keys()),
+            )
+            scored_passages = {
+                doc_id: scored_passages[doc_id] for _, doc_id in keep_keys
+            }
+
+        futures = set()
+        # Break up the passages to distribute the work over the pool
+        it = iter(scored_passages)
+
+        for i in range(0, len(scored_passages), batch_size):
+            futures.add(
+                self.pool.submit(
+                    _construct_passages,
+                    self,
+                    {
+                        doc_id: scored_passages[doc_id]
+                        for doc_id in itertools.islice(it, batch_size)
+                    },
+                    window_size,
+                )
+            )
+
+        for f in cf.as_completed(futures):
+            constructed = f.result()
+            for passage in constructed:
+                print(passage)
+                yield passage
 
     @requires_corpus(corpus.WebRenderableCorpus)
     def render_docs_html(self, query, random_sample_size=None):
@@ -1838,7 +1891,9 @@ class Index:
                 raise TypeError(f"Unsupported feature {f}.")
 
     @atomic()
-    def score_passages_dnf(self, field, feature_clauses, window_size):
+    def score_passages_dnf(
+        self, field, feature_clauses, window_size
+    ) -> dict[int, list[tuple[int, int, int]]]:
         """
         Find passages containing the given set of features in all documents.
 
@@ -1867,10 +1922,10 @@ class Index:
                 )
             )
 
-        passages = collections.defaultdict(list)
+        passages = dict()
         for future in cf.as_completed(futures):
             field, _, scores = future.result()
-            passages[field].extend(scores)
+            passages |= scores
 
         return passages
 
@@ -2381,7 +2436,14 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
         positions &= valid_window
         valid_window.run_optimize()
 
-        passage_scores = []
+        passage_scores = collections.defaultdict(list)
+
+        if not positions:
+            return (
+                field,
+                first_doc_id,
+                passage_scores,
+            )
 
         # Walk through the positions and check against valid_window to find passages.
         # Establish boundaries for the first doc
@@ -2399,12 +2461,12 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
         for position in positions[1:]:
             if position > doc_end:
                 # End passage and move on to next document
-                passage_scores.append(
+                passage_scores[doc_id].append(
                     (
-                        positions.range_cardinality(passage_start, last_position + 1),
+                        field,
                         passage_start - doc_start,
                         last_position - doc_start,
-                        doc_id,
+                        positions.range_cardinality(passage_start, last_position + 1),
                     )
                 )
                 passage_start = last_position = position
@@ -2415,12 +2477,12 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
 
             elif position - last_position > window_size:
                 # Immediately end the passage, don't need to check valid_window
-                passage_scores.append(
+                passage_scores[doc_id].append(
                     (
-                        positions.range_cardinality(passage_start, last_position + 1),
+                        field,
                         passage_start - doc_start,
                         last_position - doc_start,
-                        doc_id,
+                        positions.range_cardinality(passage_start, last_position + 1),
                     )
                 )
                 passage_start = last_position = position
@@ -2430,12 +2492,12 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
         else:
             # Don't forget the last window, if it wasn't closed off.
             if last_position != passage_start:
-                passage_scores.append(
+                passage_scores[doc_id].append(
                     (
-                        positions.range_cardinality(passage_start, last_position + 1),
+                        field,
                         passage_start - doc_start,
                         last_position - doc_start,
-                        doc_id,
+                        positions.range_cardinality(passage_start, last_position + 1),
                     )
                 )
 
@@ -2473,3 +2535,39 @@ def _count_collocations(idx, field, first_doc_id, features, window_size):
                     counts.append((feature_id, count, len(other_positions)))
 
     return counts, len(positions), len(valid_window)
+
+
+def _construct_passages(idx, scored_passages, window_size, combiner_fn=" ".join):
+    """ """
+
+    with idx:
+        index_fn = idx.corpus.index
+
+        constructed = []
+
+        for doc_id, key, doc in idx.docs(scored_passages):
+            indexed = index_fn(doc)
+
+            doc_passages = collections.defaultdict(list)
+
+            for passage in scored_passages[doc_id]:
+                field, start, end = passage[:3]
+                passage_text = combiner_fn(
+                    indexed[field][max(0, start - window_size) : end + window_size]
+                )
+
+                doc_passages[field].append(passage_text)
+
+            # Drop sequence fields
+            indexed = {
+                field: values
+                for field, values in indexed.items()
+                if isinstance(values, set)
+            }
+
+            for field, p in doc_passages.items():
+                indexed[field] = p
+
+            constructed.append((doc_id, key, indexed))
+
+    return constructed

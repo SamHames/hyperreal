@@ -106,3 +106,38 @@
     </form>
 </div> 
 {%- endmacro %}
+
+
+{% macro render_passage(passage) -%}
+<dl>
+    {% for field, values in passage.items() %}
+        {% for value in values %}
+        <dt>{{field}}</dt>
+        <dd>{{value}}</dd>
+        {% endfor %}
+    {% endfor %}
+</dl>
+{%- endmacro %}
+
+
+{% macro render_search_results(results, result_type) -%}
+    {% if result_type == 'concordances' %}
+        {{ render_all_field_matches(results) }}
+
+    {% elif result_type == 'passage' %}
+        <ul class="passage-list">
+            {% for doc_id, doc_key, passage in results %}
+            <li>{{ render_passage(passage) }}</li>
+            {% endfor %}
+        </ul>  
+
+    {% else %}
+        <ul class="doc-list">
+            {% for doc_id, doc in result %}
+            <li>{{ doc }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+
+{%- endmacro %}
+
