@@ -125,7 +125,7 @@
         {{ render_all_field_matches(results) }}
 
     {% elif result_type == 'passage' %}
-        <ul class="passage-list">
+        <ul class="doc-list">
             {% for doc_id, doc_key, passage in results %}
             <li>{{ render_passage(passage) }}</li>
             {% endfor %}

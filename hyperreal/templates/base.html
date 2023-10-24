@@ -76,7 +76,7 @@ body {
     padding: 0;
 }
 
-.doc-list > li{
+.doc-list > li {
     margin: 0.75em 0.5em;
     background-color: white;
     list-style-type: none;
@@ -193,6 +193,26 @@ nav, h1 {
 h1 {
     margin-bottom: 1rem;
     margin-right: 1rem;
+}
+
+dt {
+    grid-column-start: 1;
+    text-align: right;
+    font-weight: bold ;
+}
+
+dd {
+    grid-column-start: 2;
+    margin: 0 0.5em;
+}
+
+dt::after {
+    content: ":";
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content auto;
 }
 
 
