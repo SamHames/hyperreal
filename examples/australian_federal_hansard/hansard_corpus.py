@@ -1,14 +1,4 @@
 """
-This module creates a corpus of hansard speeches - the data model is based on (and
-uses code derived from) Tim Sherratt's GLAM Workbench [1].
-
-Note that there are differences in structure between the historical
-(-2005) Hansard data and data since that point - they can broadly be brought
-together into the same schema but there might be edge cases I've missed.
-
-Note also: some of the source data is not properly structured XML - this
-approach uses BeautifulSoup in XML mode both for convenience and also because
-it does better with malformed XML data in general.
 
 [1] Sherratt, Tim. (2019). GLAM-Workbench/australian-commonwealth-hansard
 (v0.1.0). Zenodo. https://doi.org/10.5281/zenodo.3544706
@@ -30,7 +20,7 @@ from markupsafe import Markup
 
 from hyperreal.index import Index
 from hyperreal.corpus import SqliteBackedCorpus
-from hyperreal.utilities import tokens
+from hyperreal.utilities import tokens, presentable_tokens
 import hyperreal.server
 
 
@@ -41,28 +31,10 @@ class HansardCorpus(SqliteBackedCorpus):
 
     def __init__(self, db_path):
         """
-        A relational model of the proceedings of the Australian Federal
-        parliament.
-
-        This models the basic elements of the data as recorded in the Hansard XML.
-
-        The fundamental unit for this data processing is the speech, which is
-        part of a named debate and optional subdebate.
+        A corpus to wrap around the data model found in https://github.com/SamHames/hansard-tidy
 
         """
         super().__init__(db_path)
-
-    def _insert_rows(self, rows):
-        self.db.execute(
-            "insert into session values (?, ?, ?, ?, ?, ?)", rows["session"]
-        )
-        self.db.executemany("insert into debate values (?, ?, ?, ?, ?)", rows["debate"])
-        self.db.executemany(
-            "insert into subdebate values (?, ?, ?, ?, ?, ?)", rows["subdebate"]
-        )
-        self.db.executemany(
-            "insert into speech values (null, ?, ?, ?, ?, ?, ?, ?)", rows["speech"]
-        )
 
     def docs(self, doc_keys=None):
         self.db.execute("savepoint docs")
@@ -127,6 +99,29 @@ class HansardCorpus(SqliteBackedCorpus):
             "speech_date": set([speech_date.isoformat()]),
             "speech_month": set([speech_month.isoformat()]),
             "speech_year": set([speech_year.isoformat()]),
+        }
+
+    def pretty_index(self, doc):
+        root = etree.fromstring(doc["speech_xml"])
+
+        # TODO: This will need additional work to work with all the different
+        # hansard schemas.
+        talkers = root.xpath("//talker")
+        for elem in talkers:
+            elem.clear()
+
+        speech_tokens = presentable_tokens(" ".join(root.itertext()))
+
+        speech_date = date.fromisoformat(doc["date"])
+
+        return {
+            "speech": speech_tokens,
+            "house": set([doc["house"]]),
+            "debate": set([doc["debate"]]),
+            "subdebate_1": set([doc["subdebate_1"]]),
+            "subdebate_2": set([doc["subdebate_2"]]),
+            "speech_date": set([speech_date.isoformat()]),
+            "transcript_url": set([doc["html_url"]]),
         }
 
     def render_docs_html(self, doc_keys):
