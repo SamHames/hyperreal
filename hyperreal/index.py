@@ -302,7 +302,7 @@ class Index:
         doc_batch_size=1000,
         working_dir=None,
         workers=None,
-        position_window_size=0,
+        index_positions=False,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -381,7 +381,7 @@ class Index:
                             batch_doc_ids,
                             batch_doc_keys,
                             temp_index,
-                            position_window_size,
+                            index_positions,
                             write_lock,
                         )
                     )
@@ -406,7 +406,7 @@ class Index:
                         batch_doc_ids,
                         batch_doc_keys,
                         temp_index,
-                        position_window_size,
+                        index_positions,
                         write_lock,
                     )
                 )
@@ -426,11 +426,6 @@ class Index:
             # Zero out positional information
             self.db.execute("delete from position_doc_map")
             self.db.execute("delete from position_index")
-
-            self.db.execute(
-                "replace into settings values('position_window_size', ?)",
-                [position_window_size],
-            )
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -557,7 +552,6 @@ class Index:
 
             tempdir.cleanup()
 
-        self.settings["position_window_size"] = position_window_size
         self.logger.info("Indexing completed.")
 
     @atomic()
@@ -751,7 +745,11 @@ class Index:
     @requires_corpus(corpus.BaseCorpus)
     @atomic()
     def render_passages_table(
-        self, scored_passages, window_size=20, batch_size=1000, random_sample_size=None
+        self,
+        scored_passages,
+        passage_overhang=20,
+        batch_size=1000,
+        random_sample_size=None,
     ):
         """
         Render a table of passages from the associated documents.
@@ -780,7 +778,7 @@ class Index:
                         doc_id: scored_passages[doc_id]
                         for doc_id in itertools.islice(it, batch_size)
                     },
-                    window_size,
+                    passage_overhang,
                 )
             )
 
@@ -1891,40 +1889,58 @@ class Index:
 
     @atomic()
     def score_passages_dnf(
-        self, field, feature_clauses, window_size
+        self, feature_clauses: list[list[FeatureKeyOrId]], window_size: int
     ) -> dict[int, list[tuple[int, int, int]]]:
         """
-        Find passages containing the given set of features in all documents.
+        Find passages matching the given query in Disjunctive Normal Form.
 
-        features is broken down by fields, and passages for all matching
-        fields are retrieved. Note that positions must have been indexed
-        for this to be useful.
+        Because the passage construction works on a single field at a time,
+        the input query is broken down into separate queries by field. This
+        means that the query is only in strict Disjunctive Normal Form when
+        the features are all from the same field.
 
         """
 
         # Make sure that all of the features are from the same field.
-        field_features = collections.defaultdict(set)
         positional_fields = self.positional_fields
+        field_clauses = collections.defaultdict(list)
 
-        # TODO: Validate clauses are all from the same field.
+        for clause in feature_clauses:
+            field_features = collections.defaultdict(set)
+
+            for feature in clause:
+                if isinstance(feature, int):
+                    field, _ = self.lookup_feature(feature)
+                    field_features[field].add(feature)
+                if isinstance(feature, tuple):
+                    feature_id = self.lookup_feature_id(feature)
+                    field_features[feature[0]].add(feature_id)
+
+            for field, clause in field_features.items():
+                if field in positional_fields:
+                    field_clauses[field].append(clause)
+
         futures = set()
 
-        for first_doc_id in self._field_partitions(field):
-            futures.add(
-                self.pool.submit(
-                    _score_passages_dnf,
-                    self,
-                    field,
-                    first_doc_id,
-                    feature_clauses,
-                    window_size,
+        for field, query in field_clauses.items():
+            for first_doc_id in self._field_partitions(field):
+                futures.add(
+                    self.pool.submit(
+                        _score_passages_dnf,
+                        self,
+                        field,
+                        first_doc_id,
+                        query,
+                        window_size,
+                    )
                 )
-            )
 
-        passages = dict()
+        passages = collections.defaultdict(list)
+
         for future in cf.as_completed(futures):
             field, _, scores = future.result()
-            passages |= scores
+            for doc_id, doc_passages in scores.items():
+                passages[doc_id].extend(doc_passages)
 
         return passages
 
@@ -2068,9 +2084,7 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
             features = corpus.index(doc)
 
             for field, values in features.items():
-                # Only record position information if there is a
-                # position_window_size set, and the field is an ordered
-                # sequence type.
+                # Only record position information when requested.
                 if index_positions and isinstance(values, collections.abc.Sequence):
                     batch_position = field_doc_positions_starts[field][1][-1]
 
@@ -2419,6 +2433,8 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
             positions, doc_boundaries, window_size
         )
 
+        passage_scores = collections.defaultdict(list)
+
         for _, clause in clause_weights[1:]:
             # Keep only the union positions that actually intersect with the
             # existing window - these are the starts and ends of spans that
@@ -2429,7 +2445,11 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
 
             # Early termination if there's no matches at any point during a clause.
             if not clause_positions:
-                return []
+                return (
+                    field,
+                    first_doc_id,
+                    passage_scores,
+                )
 
             # Keep the remaining positions so we can count them as matching
             positions |= clause_positions
@@ -2443,8 +2463,6 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
         # Apply the final valid window to the positions.
         positions &= valid_window
         valid_window.run_optimize()
-
-        passage_scores = collections.defaultdict(list)
 
         if not positions:
             return (
@@ -2541,7 +2559,7 @@ def _count_collocations(idx, field, first_doc_id, features, window_size):
     return counts, len(positions), len(valid_window)
 
 
-def _construct_passages(idx, scored_passages, window_size, combiner_fn=" ".join):
+def _construct_passages(idx, scored_passages, passage_overhang, combiner_fn=" ".join):
     """ """
 
     with idx:
@@ -2557,7 +2575,9 @@ def _construct_passages(idx, scored_passages, window_size, combiner_fn=" ".join)
             for passage in scored_passages[doc_id]:
                 field, start, end = passage[:3]
                 passage_text = combiner_fn(
-                    indexed[field][max(0, start - window_size) : end + window_size]
+                    indexed[field][
+                        max(0, start - passage_overhang) : end + passage_overhang
+                    ]
                 )
 
                 doc_passages[field].append(passage_text)

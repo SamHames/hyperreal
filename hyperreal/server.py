@@ -143,9 +143,7 @@ class Cluster:
                     )
                 )
             if result_type == "passage":
-                passages = cherrypy.request.index.score_passages_dnf(
-                    "speech", passage_query, 25
-                )
+                passages = cherrypy.request.index.score_passages_dnf(passage_query, 25)
                 search_results = list(
                     cherrypy.request.index.render_passages_table(
                         passages, random_sample_size=int(exemplar_docs)
@@ -394,7 +392,7 @@ class Index:
                     )
                 if result_type == "passage":
                     passages = cherrypy.request.index.score_passages_dnf(
-                        "speech", passage_query, 25
+                        passage_query, 25
                     )
                     search_results = list(
                         cherrypy.request.index.render_passages_table(

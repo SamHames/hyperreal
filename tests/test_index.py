@@ -80,7 +80,9 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
 
     # These are actually very bad settings, but necessary for checking
     # all code paths and concurrency.
-    idx.index(doc_batch_size=10)
+    idx.index(
+        doc_batch_size=10,
+    )
 
     # Compare against the actual test data.
     target_docs, target_nnz, target_positions = check_stats()
@@ -98,61 +100,64 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
         )
     }
 
-    idx.index(doc_batch_size=10)
+    idx.index(doc_batch_size=10, index_positions=True)
 
     for feature_id, field, value in idx.db.execute(
         "select feature_id, field, value from inverted_index"
     ):
         assert (field, value) == features_field_values[feature_id]
 
-    for p in [1, 5, 10]:
-        idx.index(doc_batch_size=1, position_window_size=p)
+    idx.index(doc_batch_size=1, index_positions=True)
 
-        positions = list(
-            idx.db.execute("select sum(position_count) from position_index")
-        )[0][0]
+    positions = list(idx.db.execute("select sum(position_count) from position_index"))[
+        0
+    ][0]
 
-        if p == 1:
-            assert positions == target_positions
+    assert positions == target_positions
 
-        # Make sure that there's information for every document with
-        # positional information.
-        assert (
-            target_docs
-            == list(idx.db.execute("select sum(docs_count) from position_doc_map"))[0][
-                0
-            ]
-        )
+    # Make sure that there's information for every document with
+    # positional information.
+    assert (
+        target_docs
+        == list(idx.db.execute("select sum(docs_count) from position_doc_map"))[0][0]
+    )
 
-        # Test window extraction from documents.
-        for (
-            doc_key,
-            doc_id,
-            cooccurrence_windows,
-        ) in idx.extract_matching_feature_windows(
-            idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
-        ):
-            for match, windows in cooccurrence_windows["text"].items():
-                assert match in ["mad", "hatter"]
-                assert all("hatter" in window or "mad" in window for window in windows)
-                assert all(len(window) <= 21 for window in windows)
+    # Test window extraction from documents.
+    for (
+        doc_key,
+        doc_id,
+        cooccurrence_windows,
+    ) in idx.extract_matching_feature_windows(
+        idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
+    ):
+        for match, windows in cooccurrence_windows["text"].items():
+            assert match in ["mad", "hatter"]
+            assert all("hatter" in window or "mad" in window for window in windows)
+            assert all(len(window) <= 21 for window in windows)
 
-        for doc_key, doc_id, concordances in idx.concordances(
-            idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
-        ):
-            for concordance in concordances["text"]:
-                assert "mad" in concordance or "hatter" in concordance
+    for doc_key, doc_id, concordances in idx.concordances(
+        idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
+    ):
+        for concordance in concordances["text"]:
+            assert "mad" in concordance or "hatter" in concordance
 
-        # Test passage retrieval - because this is one line = one document,
-        # the passage retrieval is the same as the document retrieval
-        passage_query = [
-            idx.lookup_feature_id(("text", word)) for word in "mad hatter".split()
-        ]
-        score_passages = idx.score_passages_dnf("text", [passage_query], 50)
+    # Test passage retrieval - because this is one line = one document,
+    # the passage retrieval is the same as the document retrieval
+    passage_query = [[("text", word)] for word in "hare hatter".split()]
+    score_passages = idx.score_passages_dnf(passage_query, 50)
 
-        assert len(score_passages) == len(
-            idx[("text", "mad")] & idx[("text", "hatter")]
-        )
+    assert len(score_passages) > 0
+    assert len(score_passages) == len(idx[("text", "hare")] & idx[("text", "hatter")])
+
+    # Actually render the passages as well
+    rendered = list(idx.render_passages_table(score_passages))
+    for doc_id, doc_key, doc in rendered:
+        assert all("hare" in p for p in doc["text"])
+        assert all("hatter" in p for p in doc["text"])
+
+    assert (
+        len(list(idx.render_passages_table(score_passages, random_sample_size=3))) == 3
+    )
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
