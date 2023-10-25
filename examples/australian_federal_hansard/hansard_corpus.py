@@ -20,7 +20,7 @@ from markupsafe import Markup
 
 from hyperreal.index import Index
 from hyperreal.corpus import SqliteBackedCorpus
-from hyperreal.utilities import tokens, presentable_tokens
+from hyperreal.utilities import tokens
 import hyperreal.server
 
 
