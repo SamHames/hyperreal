@@ -180,7 +180,8 @@ class Index:
             row[0]: row[1] for row in self.db.execute("select key, value from settings")
         }
 
-        self.settings["display_query_results"] = "passage"
+        # TODO: reach into the corpus for this instead.
+        self.settings["display_query_results"] = "document"
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -799,7 +800,9 @@ class Index:
             query = self.sample_bitmap(query, random_sample_size)
 
         doc_keys = self.convert_query_to_keys(query)
-        return self.corpus.render_docs_html(doc_keys)
+        return [
+            (doc_keys[doc[0]], *doc) for doc in self.corpus.render_docs_html(doc_keys)
+        ]
 
     @requires_corpus(corpus.TableRenderableCorpus)
     def render_docs_table(self, query, random_sample_size=None):

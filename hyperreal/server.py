@@ -58,8 +58,12 @@ class Cluster:
         filter_cluster_id=None,
         exemplar_docs="30",
         scoring="jaccard",
-        result_type="passage",
+        result_type=None,
     ):
+        result_type = (
+            result_type or cherrypy.request.index.settings["display_query_results"]
+        )
+
         template = templates.get_template("cluster.html")
 
         cluster_id = int(cluster_id)
@@ -345,7 +349,9 @@ class Index:
         # Get the default result type from the index.
         # TODO: this should come from the corpus as a suggestion?
         # Or otherwise sniff the supported types to work it out?
-        result_type = cherrypy.request.index.settings["display_query_results"]
+        result_type = (
+            result_type or cherrypy.request.index.settings["display_query_results"]
+        )
 
         # Redirect to the index overview page to create a new model if no
         # index has been created.

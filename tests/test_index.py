@@ -296,7 +296,9 @@ def test_querying(example_index_corpora_path, pool):
         assert "the" in hyperreal.utilities.tokens(doc["text"])
 
     # This is a hacky test, as we're tokenising the representation of the text.
-    for doc_key, rendered_doc in index.render_docs_html(query, random_sample_size=3):
+    for doc_id, doc_key, rendered_doc in index.render_docs_html(
+        query, random_sample_size=3
+    ):
         assert "the" in hyperreal.utilities.tokens(rendered_doc)
 
     # No matches, return nothing:

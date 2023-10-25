@@ -133,7 +133,7 @@
 
     {% else %}
         <ul class="doc-list">
-            {% for doc_id, doc in result %}
+            {% for doc_id, doc_key, doc in results %}
             <li>{{ doc }}</li>
             {% endfor %}
         </ul>
