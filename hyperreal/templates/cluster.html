@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% from 'macros.html' import render_cluster, render_context_search, render_all_field_matches %}
+{% from 'macros.html' import render_cluster, render_context_search, render_all_field_matches, render_search_results %}
 
 {% block title %}Cluster {{ cluster_id }}{% endblock %}
 
@@ -103,21 +103,14 @@
 </details>
 
 <ul class="cluster-list">
-    {% if rendered_docs %}
+    {% if search_results %}
     <li>
         <div class="cluster-header">
-            {% if rendered_docs|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
+            {% if search_results|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
         </div>
-        {% if concordances %}
-            {{ render_all_field_matches(rendered_docs) }}
 
-        {% else %}
-            <ul class="doc-list">
-                {% for doc_id, doc in rendered_docs %}
-                <li>{{ doc }}</li>
-                {% endfor %}
-            </ul>
-        {% endif %}
+        {{ render_search_results(search_results, result_type) }}
+
     </li>
     {% endif %}
 

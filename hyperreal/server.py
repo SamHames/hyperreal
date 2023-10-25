@@ -58,6 +58,7 @@ class Cluster:
         filter_cluster_id=None,
         exemplar_docs="30",
         scoring="jaccard",
+        result_type="passage",
     ):
         template = templates.get_template("cluster.html")
 
@@ -79,19 +80,21 @@ class Cluster:
 
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
-        rendered_docs = []
+        search_results = []
         query = None
         concordances = False
 
         # Default concordance features is everything in the cluster, unless other things
         # are set?
         concordance_features = [r[1:3] for r in features]
+        passage_query = [[f[0] for f in features]]
 
         if feature_id is not None:
             feature_id = int(feature_id)
             query = cherrypy.request.index[feature_id]
 
             concordance_features.append(feature_id)
+            passage_query.append([feature_id])
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
@@ -99,12 +102,10 @@ class Cluster:
                 query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
             else:
                 query = cherrypy.request.index.cluster_docs(filter_cluster_id)
-            concordance_features.extend(
-                [
-                    r[1:3]
-                    for r in cherrypy.request.index.cluster_features(filter_cluster_id)
-                ]
-            )
+
+            filter_features = cherrypy.request.index.cluster_features(filter_cluster_id)
+            concordance_features.extend([r[1:3] for r in filter_features])
+            passage_query.append([f[0] for f in filter_features])
 
         if query:
             sorted_features = list(
@@ -132,23 +133,27 @@ class Cluster:
 
         # Retrieve matching documents if we have a corpus to render them.
         if cherrypy.request.index.corpus is not None:
-            concordances = (
-                cherrypy.request.index.settings["display_query_results"]
-                == "concordance"
-            )
-
-            if concordances:
-                rendered_docs = list(
+            if result_type == "concordance":
+                search_results = list(
                     cherrypy.request.index.concordances(
-                        retrieve_docs,
+                        query,
                         concordance_features,
                         15,
                         random_sample_size=int(exemplar_docs),
                     )
                 )
+            if result_type == "passage":
+                passages = cherrypy.request.index.score_passages_dnf(
+                    "speech", passage_query, 25
+                )
+                search_results = list(
+                    cherrypy.request.index.render_passages_table(
+                        passages, random_sample_size=int(exemplar_docs)
+                    )
+                )
             else:
-                rendered_docs = cherrypy.request.index.render_docs_html(
-                    retrieve_docs, random_sample_size=int(exemplar_docs)
+                search_results = cherrypy.request.index.render_docs_html(
+                    query, random_sample_size=int(exemplar_docs)
                 )
 
         total_docs = len(retrieve_docs)
@@ -163,8 +168,8 @@ class Cluster:
             features=features,
             index_id=index_id,
             cluster_score=None,
-            rendered_docs=rendered_docs,
-            concordances=concordances,
+            search_results=search_results,
+            result_type=result_type,
             total_docs=total_docs,
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
@@ -358,7 +363,13 @@ class Index:
             passage_query.append([highlight_feature_id])
 
         elif cluster_id is not None:
-            query = cherrypy.request.index.cluster_docs(int(cluster_id))
+            cluster_docs = cherrypy.request.index.cluster_docs(int(cluster_id))
+
+            if query is None:
+                query = cluster_docs
+            else:
+                query &= cluster_docs
+
             highlight_cluster_id = int(cluster_id)
             cluster_features = cherrypy.request.index.cluster_features(
                 highlight_cluster_id
@@ -390,7 +401,6 @@ class Index:
                             passages, random_sample_size=int(exemplar_docs)
                         )
                     )
-                    print(search_results)
                 else:
                     search_results = cherrypy.request.index.render_docs_html(
                         query, random_sample_size=int(exemplar_docs)

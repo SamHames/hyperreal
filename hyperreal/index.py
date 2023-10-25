@@ -787,7 +787,6 @@ class Index:
         for f in cf.as_completed(futures):
             constructed = f.result()
             for passage in constructed:
-                print(passage)
                 yield passage
 
     @requires_corpus(corpus.WebRenderableCorpus)
@@ -2053,9 +2052,12 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
             lambda: collections.defaultdict(lambda: (BitMap(), BitMap()))
         )
 
-        # Mapping of fields -> position ends for each document. Note that
-        # documents with an empty field present are dropped at this stage.
-        field_doc_position = collections.defaultdict(lambda: (BitMap(), BitMap([0])))
+        # Mapping of fields -> doc_ids, position starts for each document.
+        # Note that documents with an empty field present are dropped at this
+        # stage.
+        field_doc_positions_starts = collections.defaultdict(
+            lambda: (BitMap(), BitMap([0]))
+        )
 
         docs = corpus.docs(doc_keys=doc_keys)
 
@@ -2070,7 +2072,7 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                 # position_window_size set, and the field is an ordered
                 # sequence type.
                 if index_positions and isinstance(values, collections.abc.Sequence):
-                    batch_position = field_doc_position[field][1][-1] + 1
+                    batch_position = field_doc_positions_starts[field][1][-1]
 
                     for position, value in enumerate(values):
                         if value is None:
@@ -2081,8 +2083,11 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                     if not values:
                         continue
                     else:
-                        field_doc_position[field][0].add(doc_id)
-                        field_doc_position[field][1].add(position + batch_position)
+                        field_doc_positions_starts[field][0].add(doc_id)
+                        # +1 because it's the start of the *next* document.
+                        field_doc_positions_starts[field][1].add(
+                            position + batch_position + 1
+                        )
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -2121,7 +2126,10 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                 """
             )
 
-            for field, (batch_doc_ids, position_starts) in field_doc_position.items():
+            for field, (
+                batch_doc_ids,
+                position_starts,
+            ) in field_doc_positions_starts.items():
                 local_db.execute(
                     "insert into batch_position values(?, ?, ?, ?, ?, ?)",
                     (
@@ -2130,7 +2138,7 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                         last_doc_id,
                         len(batch_doc_ids),
                         batch_doc_ids,
-                        position_starts[1:],
+                        position_starts,
                     ),
                 )
 
@@ -2450,16 +2458,12 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
         passage_start = last_position = positions[0]
         rank = doc_boundaries.rank(passage_start)
 
-        if rank == 0:
-            doc_start = 0
-        else:
-            doc_start = doc_boundaries[rank - 1]
-
-        doc_end = doc_boundaries[rank]
-        doc_id = doc_ids[rank]
+        doc_start = doc_boundaries[rank - 1]
+        next_start = doc_boundaries[rank]
+        doc_id = doc_ids[rank - 1]
 
         for position in positions[1:]:
-            if position > doc_end:
+            if position >= next_start:
                 # End passage and move on to next document
                 passage_scores[doc_id].append(
                     (
@@ -2472,8 +2476,8 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
                 passage_start = last_position = position
                 rank = doc_boundaries.rank(position)
                 doc_start = doc_boundaries[rank - 1]
-                doc_end = doc_boundaries[rank]
-                doc_id = doc_ids[rank]
+                next_start = doc_boundaries[rank]
+                doc_id = doc_ids[rank - 1]
 
             elif position - last_position > window_size:
                 # Immediately end the passage, don't need to check valid_window

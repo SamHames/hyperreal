@@ -143,6 +143,17 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
             for concordance in concordances["text"]:
                 assert "mad" in concordance or "hatter" in concordance
 
+        # Test passage retrieval - because this is one line = one document,
+        # the passage retrieval is the same as the document retrieval
+        passage_query = [
+            idx.lookup_feature_id(("text", word)) for word in "mad hatter".split()
+        ]
+        score_passages = idx.score_passages_dnf("text", [passage_query], 50)
+
+        assert len(score_passages) == len(
+            idx[("text", "mad")] & idx[("text", "hatter")]
+        )
+
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
 def test_model_creation(pool, example_index_path, n_clusters):
@@ -276,7 +287,7 @@ def test_querying(example_index_corpora_path, pool):
     assert q == len(index.render_docs_table(query))
     assert 5 == len(index.render_docs_table(query, random_sample_size=5))
 
-    for doc_key, doc in index.docs(query):
+    for doc_id, doc_key, doc in index.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc["text"])
 
     # This is a hacky test, as we're tokenising the representation of the text.
