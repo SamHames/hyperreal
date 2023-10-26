@@ -19,27 +19,52 @@ import requests
 import hyperreal
 
 
-@pytest.fixture()
-def server(tmp_path):
-    random_name = tmp_path / str(uuid.uuid4())
-    shutil.copy(pathlib.Path("tests", "index", "alice_index.db"), random_name)
+servers = [
+    # Index server with no associated corpus.
+    (None, None, pathlib.Path("tests", "index", "alice_index.db")),
+    # PlainTextCorpus
+    (
+        pathlib.Path("tests", "corpora", "alice.db"),
+        hyperreal.corpus.PlainTextSqliteCorpus,
+        pathlib.Path("tests", "index", "alice_index.db"),
+    ),
+]
+
+
+@pytest.fixture(params=servers)
+def server(tmp_path, request):
+    """Server fixture that handles single file corpora."""
+    source_corpus_path, source_corpus_class, source_index = request.param
+
+    if source_corpus_path is not None:
+        corpus_path = tmp_path / str(uuid.uuid4())
+        shutil.copy(source_corpus_path, corpus_path)
+    else:
+        corpus_path = None
+
+    index_path = tmp_path / str(uuid.uuid4())
+    shutil.copy(source_index, index_path)
+
     context = mp.get_context("spawn")
 
     with cf.ProcessPoolExecutor(4, mp_context=context) as pool:
-        idx = hyperreal.index.Index(random_name, pool=pool)
+        if corpus_path is not None:
+            corp = source_corpus_class(corpus_path)
+        else:
+            corp = None
+
+        idx = hyperreal.index.Index(index_path, corpus=corp, pool=pool)
         idx.initialise_clusters(8, min_docs=3)
         idx.refine_clusters(iterations=5)
 
-        index_server = hyperreal.server.SingleIndexServer(random_name, pool=pool)
+        index_server = hyperreal.server.SingleIndexServer(index_path, pool=pool)
         engine = hyperreal.server.launch_web_server(index_server, port=0)
         host, port = cherrypy.server.bound_addr
         yield f"http://{host}:{port}"
         engine.exit()
 
 
-# Parametrise this for all of the index types to make life easier.
-# This will also help test more of the functionality related to the corpus.
-def test_index_server_no_corpus(server):
+def test_server(server):
     """
     Start an index only server in the background using the CLI.
 

@@ -85,7 +85,7 @@ class Cluster:
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
         search_results = []
-        query = None
+        query = cherrypy.request.index.cluster_docs(cluster_id)
         concordances = False
 
         # Default concordance features is everything in the cluster, unless other things
@@ -95,45 +95,33 @@ class Cluster:
 
         if feature_id is not None:
             feature_id = int(feature_id)
-            query = cherrypy.request.index[feature_id]
+            query &= cherrypy.request.index[feature_id]
 
             concordance_features.append(feature_id)
             passage_query.append([feature_id])
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
-            if query:
-                query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
-            else:
-                query = cherrypy.request.index.cluster_docs(filter_cluster_id)
+            query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
 
             filter_features = cherrypy.request.index.cluster_features(filter_cluster_id)
             concordance_features.extend([r[1:3] for r in filter_features])
             passage_query.append([f[0] for f in filter_features])
 
-        if query:
-            sorted_features = list(
-                cherrypy.request.index.pivot_clusters_by_query(
-                    query,
-                    cluster_ids=[cluster_id],
-                    top_k=n_features,
-                    scoring=scoring,
-                )
+        sorted_features = list(
+            cherrypy.request.index.pivot_clusters_by_query(
+                query,
+                cluster_ids=[cluster_id],
+                top_k=n_features,
+                scoring=scoring,
             )
+        )
 
-            # Make sure that there are actually matching features.
-            if sorted_features:
-                features = sorted_features[0][-1]
+        # Make sure that there are actually matching features.
+        if sorted_features:
+            features = sorted_features[0][-1]
 
-            # Make sure to only show the intersection of the requested feature with
-            # the current cluster.
-            retrieve_docs = query & cherrypy.request.index.cluster_docs(cluster_id)
-
-            visible_features = [feature[0] for feature in features]
-
-        else:
-            retrieve_docs = cherrypy.request.index.cluster_docs(cluster_id)
-            visible_features = None
+        visible_features = [feature[0] for feature in features]
 
         # Retrieve matching documents if we have a corpus to render them.
         if cherrypy.request.index.corpus is not None:
@@ -158,7 +146,7 @@ class Cluster:
                     query, random_sample_size=int(exemplar_docs)
                 )
 
-        total_docs = len(retrieve_docs)
+        total_docs = len(query)
 
         fields = [row[0] for row in cherrypy.request.index.indexed_field_summary()]
 
