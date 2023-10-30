@@ -12,6 +12,7 @@ import concurrent.futures as cf
 import csv
 from functools import wraps
 import heapq
+import itertools
 import logging
 import math
 import multiprocessing as mp
@@ -179,7 +180,8 @@ class Index:
             row[0]: row[1] for row in self.db.execute("select key, value from settings")
         }
 
-        self.settings["display_query_results"] = "display"
+        # TODO: reach into the corpus for this instead.
+        self.settings["display_query_results"] = "document"
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -301,7 +303,7 @@ class Index:
         doc_batch_size=1000,
         working_dir=None,
         workers=None,
-        position_window_size=0,
+        index_positions=False,
     ):
         """
         Indexes the corpus, using the provided function or the corpus default.
@@ -380,7 +382,7 @@ class Index:
                             batch_doc_ids,
                             batch_doc_keys,
                             temp_index,
-                            position_window_size,
+                            index_positions,
                             write_lock,
                         )
                     )
@@ -405,7 +407,7 @@ class Index:
                         batch_doc_ids,
                         batch_doc_keys,
                         temp_index,
-                        position_window_size,
+                        index_positions,
                         write_lock,
                     )
                 )
@@ -425,11 +427,6 @@ class Index:
             # Zero out positional information
             self.db.execute("delete from position_doc_map")
             self.db.execute("delete from position_index")
-
-            self.db.execute(
-                "replace into settings values('position_window_size', ?)",
-                [position_window_size],
-            )
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -556,20 +553,28 @@ class Index:
 
             tempdir.cleanup()
 
-        self.settings["position_window_size"] = position_window_size
         self.logger.info("Indexing completed.")
 
     @atomic()
-    def convert_query_to_keys(self, query):
-        """Generate the doc_keys one by one for the given query."""
+    def convert_query_to_keys(self, query) -> dict[Hashable, int]:
+        """
+        Return a mapping of doc_keys to their doc_id.
 
+        This can be passed directly to corpus objects to retrieve matching
+        docs.
+
+        """
+
+        key_docs = {}
         for doc_id in query:
             doc_key = list(
                 self.db.execute(
                     "select doc_key from doc_key where doc_id = ?", [doc_id]
                 )
             )[0][0]
-            yield doc_key
+            key_docs[doc_key] = doc_id
+
+        return key_docs
 
     @atomic()
     def iter_field_docs(self, field, min_docs=1):
@@ -627,7 +632,8 @@ class Index:
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
-        return self.corpus.docs(doc_keys=keys)
+        for key, doc in self.corpus.docs(doc_keys=sorted(keys)):
+            yield keys[key], key, doc
 
     @requires_corpus(corpus.BaseCorpus)
     @atomic()
@@ -662,7 +668,7 @@ class Index:
 
             field_features[field].add(value)
 
-        for doc_id, (doc_key, doc) in zip(query, self.docs(query)):
+        for doc_id, doc_key, doc in self.docs(query):
             indexed = self.corpus.index(doc)
 
             doc_cooccurrence = dict()
@@ -737,6 +743,51 @@ class Index:
         else:
             return bitmap.copy()
 
+    @requires_corpus(corpus.BaseCorpus)
+    @atomic()
+    def render_passages_table(
+        self,
+        scored_passages,
+        passage_overhang=20,
+        batch_size=1000,
+        random_sample_size=None,
+    ):
+        """
+        Render a table of passages from the associated documents.
+
+        """
+
+        if random_sample_size is not None:
+            keep_keys = heapq.nlargest(
+                random_sample_size,
+                ((self.random.random(), doc_id) for doc_id in scored_passages.keys()),
+            )
+            scored_passages = {
+                doc_id: scored_passages[doc_id] for _, doc_id in keep_keys
+            }
+
+        futures = set()
+        # Break up the passages to distribute the work over the pool
+        it = iter(scored_passages)
+
+        for i in range(0, len(scored_passages), batch_size):
+            futures.add(
+                self.pool.submit(
+                    _construct_passages,
+                    self,
+                    {
+                        doc_id: scored_passages[doc_id]
+                        for doc_id in itertools.islice(it, batch_size)
+                    },
+                    passage_overhang,
+                )
+            )
+
+        for f in cf.as_completed(futures):
+            constructed = f.result()
+            for passage in constructed:
+                yield passage
+
     @requires_corpus(corpus.WebRenderableCorpus)
     def render_docs_html(self, query, random_sample_size=None):
         """
@@ -749,7 +800,9 @@ class Index:
             query = self.sample_bitmap(query, random_sample_size)
 
         doc_keys = self.convert_query_to_keys(query)
-        return self.corpus.render_docs_html(doc_keys)
+        return [
+            (doc_keys[doc[0]], *doc) for doc in self.corpus.render_docs_html(doc_keys)
+        ]
 
     @requires_corpus(corpus.TableRenderableCorpus)
     def render_docs_table(self, query, random_sample_size=None):
@@ -1838,66 +1891,96 @@ class Index:
                 raise TypeError(f"Unsupported feature {f}.")
 
     @atomic()
-    def score_passages(self, features, window_size, mode="best"):
+    def score_passages_dnf(
+        self, feature_clauses: list[list[FeatureKeyOrId]], window_size: int
+    ) -> dict[int, list[tuple[int, int, int]]]:
         """
-        Find passages containing the given set of features in all documents.
+        Find passages matching the given query in Disjunctive Normal Form.
 
-        features is broken down by fields, and passages for all matching
-        fields are retrieved. Note that positions must have been indexed
-        for this to be useful. window_size is in the units of the underlying
-        position_window_size used at index time.
+        Because the passage construction works on a single field at a time,
+        the input query is broken down into separate queries by field. This
+        means that the query is only in strict Disjunctive Normal Form when
+        the features are all from the same field.
 
         """
-
-        valid_modes = ["best", "all"]
-
-        if mode not in valid_modes:
-            raise ValueError(
-                f"Unknown passage retrieval {mode=}. Try one of {valid_modes=}."
-            )
 
         # Make sure that all of the features are from the same field.
-        field_features = collections.defaultdict(set)
         positional_fields = self.positional_fields
+        field_clauses = collections.defaultdict(list)
 
-        # Break down the list of features into fields
-        for f in features:
-            if isinstance(f, int):
-                field = self.lookup_feature(f)[0]
+        for clause in feature_clauses:
+            field_features = collections.defaultdict(set)
 
+            for feature in clause:
+                if isinstance(feature, int):
+                    field, _ = self.lookup_feature(feature)
+                    field_features[field].add(feature)
+                if isinstance(feature, tuple):
+                    feature_id = self.lookup_feature_id(feature)
+                    field_features[feature[0]].add(feature_id)
+
+            for field, clause in field_features.items():
                 if field in positional_fields:
-                    field_features[field].add(f)
-
-            elif isinstance(f, tuple):
-                feature_id = self.lookup_feature_id(f)
-
-                if field in positional_fields:
-                    fields_features[f[0]].add(feature_id)
-            else:
-                raise TypeError(f"Unsupported feature {f}.")
+                    field_clauses[field].append(clause)
 
         futures = set()
 
-        for field, features in field_features.items():
+        for field, query in field_clauses.items():
             for first_doc_id in self._field_partitions(field):
                 futures.add(
                     self.pool.submit(
-                        _score_union_passages,
+                        _score_passages_dnf,
                         self,
                         field,
                         first_doc_id,
-                        features,
+                        query,
                         window_size,
-                        mode,
                     )
                 )
 
         passages = collections.defaultdict(list)
+
         for future in cf.as_completed(futures):
             field, _, scores = future.result()
-            passages[field].extend(scores)
+            for doc_id, doc_passages in scores.items():
+                passages[doc_id].extend(doc_passages)
 
         return passages
+
+    @atomic()
+    def count_collocations(self, field, features, window_size):
+        """
+        Count collocations near the given query of positions.
+
+        """
+        # TODO: Validate clauses are all from the same field.
+        futures = set()
+
+        for first_doc_id in self._field_partitions(field):
+            futures.add(
+                self.pool.submit(
+                    _count_collocations,
+                    self,
+                    field,
+                    first_doc_id,
+                    features,
+                    window_size,
+                )
+            )
+
+        collocations = collections.defaultdict(lambda: [0, 0])
+        total_query = 0
+        total_window = 0
+
+        for future in cf.as_completed(futures):
+            counts, query_hits, window_hits = future.result()
+            total_query += query_hits
+            total_window += window_hits
+
+            for feature_id, count, feature_count in counts:
+                collocations[feature_id][0] += count
+                collocations[feature_id][1] += feature_count
+        return collocations, total_query, total_window
 
     def _field_partitions(self, field):
         return [
@@ -1920,6 +2003,15 @@ class Index:
                 "select field from field_summary where position_count > 0"
             )
         }
+
+    @atomic()
+    def _union_position_query(self, first_doc_id, features):
+        positions = BitMap()
+
+        for feature_id in features:
+            positions |= self._get_partition_positions(first_doc_id, feature_id)
+
+        return positions
 
     def _get_partition_positions(self, first_doc_id, feature_id):
         positions = list(
@@ -1960,21 +2052,9 @@ class Index:
             )
 
 
-def _index_docs(
-    corpus, doc_ids, doc_keys, temp_db_path, position_window_size, write_lock
-):
+def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_lock):
     """
     Index all of the given docs into temp_db_path.
-
-    position_window_size has two modes:
-
-    0 - disabled, no position information will be recorded.
-    > 0 - approximate position windows of the given half width will be
-      created. Coocurrence of values can be found exactly up to 2 *
-      position_window_size - note that edge effects mean that the position
-      windows will miss cooccurence across window boundaries which is why the
-      limit is 2*position_window_size not position_window_size. Note that
-      setting this to 1 computes an exact position index.
 
     """
 
@@ -1991,9 +2071,12 @@ def _index_docs(
             lambda: collections.defaultdict(lambda: (BitMap(), BitMap()))
         )
 
-        # Mapping of fields -> position ends for each document. Note that
-        # documents with an empty field present are dropped at this stage.
-        field_doc_position = collections.defaultdict(lambda: (BitMap(), BitMap([0])))
+        # Mapping of fields -> doc_ids, position starts for each document.
+        # Note that documents with an empty field present are dropped at this
+        # stage.
+        field_doc_positions_starts = collections.defaultdict(
+            lambda: (BitMap(), BitMap([0]))
+        )
 
         docs = corpus.docs(doc_keys=doc_keys)
 
@@ -2004,32 +2087,24 @@ def _index_docs(
             features = corpus.index(doc)
 
             for field, values in features.items():
-                # Only record position information if there is a
-                # position_window_size set, and the field is an ordered
-                # sequence type.
-                if position_window_size and isinstance(
-                    values, collections.abc.Sequence
-                ):
-                    batch_position = field_doc_position[field][1][-1] + 1
+                # Only record position information when requested.
+                if index_positions and isinstance(values, collections.abc.Sequence):
+                    batch_position = field_doc_positions_starts[field][1][-1]
 
-                    # Make sure this is initilaised - values can be non-empty
-                    # but only contain sentinels that generate no positions.
-                    position = None
-
-                    position_values = utilities.approximate_positions_with_sentinels(
-                        values, position_window_size
-                    )
-
-                    for position, value in position_values:
+                    for position, value in enumerate(values):
+                        if value is None:
+                            raise ValueError("Values cannot contain None")
                         batch[field][value][1].add(position + batch_position)
 
-                    # Record offset for the start of the next positions in this
-                    # field for this batch.
-                    if position is None:
+                    # If values is empty, move on to the next layer.
+                    if not values:
                         continue
                     else:
-                        field_doc_position[field][0].add(doc_id)
-                        field_doc_position[field][1].add(position + batch_position)
+                        field_doc_positions_starts[field][0].add(doc_id)
+                        # +1 because it's the start of the *next* document.
+                        field_doc_positions_starts[field][1].add(
+                            position + batch_position + 1
+                        )
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -2068,7 +2143,10 @@ def _index_docs(
                 """
             )
 
-            for field, (batch_doc_ids, position_starts) in field_doc_position.items():
+            for field, (
+                batch_doc_ids,
+                position_starts,
+            ) in field_doc_positions_starts.items():
                 local_db.execute(
                     "insert into batch_position values(?, ?, ?, ?, ?, ?)",
                     (
@@ -2077,7 +2155,7 @@ def _index_docs(
                         last_doc_id,
                         len(batch_doc_ids),
                         batch_doc_ids,
-                        position_starts[1:],
+                        position_starts,
                     ),
                 )
 
@@ -2323,84 +2401,130 @@ def _union_query(args):
     return query_key, query, weight
 
 
-def _partition_union_positions(idx, field, first_doc_id, features):
+def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
     """
-    Take the union (OR) of the positions vectors for each of the given features.
-
-    Assumptions: all of the features are from the same field - this function
-    does not check or enforce this constraint though.
+    Score passages for a query in disjunctive normal form.
 
     """
-
     with idx:
+        # Order clauses by ascending number of positions
+        clause_weights = []
+        for clause in feature_clauses:
+            weight = 0
+            for feature_id in clause:
+                position_count = list(
+                    idx.db.execute(
+                        """
+                        select position_count
+                        from position_index
+                        where (feature_id, first_doc_id) = (?, ?)
+                        """,
+                        (feature_id, first_doc_id),
+                    )
+                )
+                if position_count:
+                    weight += position_count[0][0]
+
+            clause_weights.append((weight, clause))
+
+        clause_weights.sort()
         _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
 
-        positions = BitMap()
+        # Process the first clause to initialise everything
+        positions = idx._union_position_query(first_doc_id, clause_weights[0][1])
+        valid_window = utilities.expand_positions_window(
+            positions, doc_boundaries, window_size
+        )
 
-        for f in features:
-            positions |= idx._get_partition_positions(first_doc_id, f)
+        passage_scores = collections.defaultdict(list)
 
-    return field, first_doc_id, positions, doc_ids, doc_boundaries
-
-
-def _score_passages(
-    field, first_doc_id, positions, doc_ids, doc_boundaries, window_size, mode
-):
-    if not positions:
-        return []
-
-    passage_scores = []
-
-    # Establish boundaries for the first doc
-    total_positions = len(positions)
-    first_position = positions[0]
-    rank = doc_boundaries.rank(first_position)
-    if rank == 0:
-        start = 0
-    else:
-        start = doc_boundaries[rank - 1]
-    end = doc_boundaries[rank]
-    doc_id = doc_ids[rank]
-    best_score = (0, 0, 0)
-
-    if mode == "best":
-        for i, pos in enumerate(positions):
-            if pos > end:
-                passage_scores.append((*best_score, doc_id))
-                rank = doc_boundaries.rank(pos)
-                start = doc_boundaries[rank - 1]
-                end = doc_boundaries[rank]
-                doc_id = doc_ids[rank]
-                best_score = (0, 0, 0)
-
-            # Find how many hits are in the window, and the location of the
-            # last hit - we can use this to construct windows and for further
-            # combinations of ranks later.
-            furthest_extent = positions.rank(min(end, pos + window_size))
-            last_hit = positions[furthest_extent - 1] - start
-
-            best_score = max(
-                best_score,
-                (furthest_extent - i, pos - start, last_hit),
-                # Note: break ties with the earlier position in the document
-                key=lambda x: (x[0], -x[1]),
+        for _, clause in clause_weights[1:]:
+            # Keep only the union positions that actually intersect with the
+            # existing window - these are the starts and ends of spans that
+            # can satisfy the spacing criteria.
+            clause_positions = (
+                idx._union_position_query(first_doc_id, clause) & valid_window
             )
 
-        passage_scores.append((*best_score, doc_id))
+            # Early termination if there's no matches at any point during a clause.
+            if not clause_positions:
+                return (
+                    field,
+                    first_doc_id,
+                    passage_scores,
+                )
 
-    elif mode == "all":
-        for i, pos in enumerate(positions):
-            if pos > end:
-                rank = doc_boundaries.rank(pos)
-                start = doc_boundaries[rank - 1]
-                end = doc_boundaries[rank]
-                doc_id = doc_ids[rank]
+            # Keep the remaining positions so we can count them as matching
+            positions |= clause_positions
 
-            furthest_extent = positions.rank(min(end, pos + window_size))
-            last_hit = positions[furthest_extent - 1] - start
-            passage_scores.append((furthest_extent - i, pos - start, last_hit, doc_id))
-    else:
-        raise ValueError(f"Unknown passage retrieval {mode=}")
+            # Update the windows by intersecting with the new valid windows
+            # from this clause.
+            valid_window &= utilities.expand_positions_window(
+                clause_positions, doc_boundaries, window_size
+            )
+
+        # Apply the final valid window to the positions.
+        positions &= valid_window
+        valid_window.run_optimize()
+
+        if not positions:
+            return (
+                field,
+                first_doc_id,
+                passage_scores,
+            )
+
+        # Walk through the positions and check against valid_window to find passages.
+        # Establish boundaries for the first doc
+        passage_start = last_position = positions[0]
+        rank = doc_boundaries.rank(passage_start)
+
+        doc_start = doc_boundaries[rank - 1]
+        next_start = doc_boundaries[rank]
+        doc_id = doc_ids[rank - 1]
+
+        for position in positions[1:]:
+            if position >= next_start:
+                # End passage and move on to next document
+                passage_scores[doc_id].append(
+                    (
+                        field,
+                        passage_start - doc_start,
+                        last_position - doc_start,
+                        positions.range_cardinality(passage_start, last_position + 1),
+                    )
+                )
+                passage_start = last_position = position
+                rank = doc_boundaries.rank(position)
+                doc_start = doc_boundaries[rank - 1]
+                next_start = doc_boundaries[rank]
+                doc_id = doc_ids[rank - 1]
+
+            elif position - last_position > window_size:
+                # Immediately end the passage, don't need to check valid_window
+                passage_scores[doc_id].append(
+                    (
+                        field,
+                        passage_start - doc_start,
+                        last_position - doc_start,
+                        positions.range_cardinality(passage_start, last_position + 1),
+                    )
+                )
+                passage_start = last_position = position
+
+            else:
+                last_position = position
+        else:
+            # Don't forget the last window, if it wasn't closed off.
+            if last_position != passage_start:
+                passage_scores[doc_id].append(
+                    (
+                        field,
+                        passage_start - doc_start,
+                        last_position - doc_start,
+                        positions.range_cardinality(passage_start, last_position + 1),
+                    )
+                )
 
     return (
         field,
@@ -2409,11 +2533,68 @@ def _score_passages(
     )
 
 
-def _score_union_passages(idx, field, first_doc_id, features, window_size, mode):
-    _, _, positions, doc_ids, doc_boundaries = _partition_union_positions(
-        idx, field, first_doc_id, features
-    )
-    _, _, scores = _score_passages(
-        field, first_doc_id, positions, doc_ids, doc_boundaries, window_size, mode
-    )
-    return field, first_doc_id, scores
+def _count_collocations(idx, field, first_doc_id, features, window_size):
+    """
+    Count collocations of all of the given features up to window_size positions away.
+
+    """
+
+    features = set(features)
+
+    with idx:
+        counts = []
+        positions = idx._union_position_query(first_doc_id, features)
+        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
+        valid_window = utilities.expand_positions_window(
+            positions, doc_boundaries, window_size
+        )
+
+        for (feature_id,) in idx.db.execute(
+            "select feature_id from position_index where first_doc_id = ?",
+            [first_doc_id],
+        ):
+            if feature_id not in features:
+                other_positions = idx._get_partition_positions(first_doc_id, feature_id)
+                if other_positions:
+                    count = valid_window.intersection_cardinality(other_positions)
+                    counts.append((feature_id, count, len(other_positions)))
+
+    return counts, len(positions), len(valid_window)
+
+
+def _construct_passages(idx, scored_passages, passage_overhang, combiner_fn=" ".join):
+    """ """
+
+    with idx:
+        index_fn = idx.corpus.index
+
+        constructed = []
+
+        for doc_id, key, doc in idx.docs(scored_passages):
+            indexed = index_fn(doc)
+
+            doc_passages = collections.defaultdict(list)
+
+            for passage in scored_passages[doc_id]:
+                field, start, end = passage[:3]
+                passage_text = combiner_fn(
+                    indexed[field][
+                        max(0, start - passage_overhang) : end + passage_overhang
+                    ]
+                )
+
+                doc_passages[field].append(passage_text)
+
+            # Drop sequence fields
+            indexed = {
+                field: values
+                for field, values in indexed.items()
+                if isinstance(values, set)
+            }
+
+            for field, p in doc_passages.items():
+                indexed[field] = p
+
+            constructed.append((doc_id, key, indexed))
+
+    return constructed

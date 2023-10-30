@@ -65,20 +65,15 @@ def make_two_file_indexer(CorpusType):
         "large collections.",
     )
     @click.option(
-        "--position-window-size",
-        default=0,
-        type=int,
+        "--index-positions",
+        default=True,
+        type=bool,
         help="""
-        The window size to record approximate positional information. The
-        default value of 0 disables recording this information. When > 0,
-        approximate positions of values are recorded up to the given
-        granularity. Smaller values require more space, but enable precise
-        querying. Setting position size to 1 enables recording of exact term
-        positions and precise querying for phrases, but currently only 2**32
-        positions can be recorded in a single field.
+        Turn on to enable indexing of positional information of features in
+        sequence fields.
         """,
     )
-    def corpus_indexer(corpus_db, index_db, doc_batch_size, position_window_size):
+    def corpus_indexer(corpus_db, index_db, doc_batch_size, index_positions):
         """
         Creates the index database representing the given corpus.
 
@@ -94,7 +89,7 @@ def make_two_file_indexer(CorpusType):
             doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus, pool=pool)
 
             doc_index.index(
-                doc_batch_size=doc_batch_size, position_window_size=position_window_size
+                doc_batch_size=doc_batch_size, index_positions=index_positions
             )
 
     return corpus_indexer
