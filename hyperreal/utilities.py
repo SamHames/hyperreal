@@ -143,26 +143,17 @@ def expand_positions_window(positions, doc_boundaries, window_size):
 
     windowed = positions.copy()
 
-    current_position = positions[0]
-    rank = doc_boundaries.rank(current_position)
-    doc_start = doc_boundaries[rank - 1]
-    next_start = doc_boundaries[rank]
-    final_position = positions[-1]
+    next_start = -1
 
-    while 1:
-        if current_position >= next_start:
+    for position in positions:
+        if position >= next_start:
             # reset the document we're currently in
-            rank = doc_boundaries.rank(current_position)
+            rank = doc_boundaries.rank(position)
             doc_start = doc_boundaries[rank - 1]
             next_start = doc_boundaries[rank]
 
         # Actually apply the window
-        end_range = min(next_start, current_position + window_size) + 1
-        windowed.add_range(max(doc_start, current_position - window_size), end_range)
-
-        if end_range > final_position:
-            break
-
-        current_position = positions.next_set_bit(end_range)
+        end_range = min(next_start, position + window_size) + 1
+        windowed.add_range(max(doc_start, position - window_size), end_range)
 
     return windowed
