@@ -43,7 +43,7 @@ def social_media_tokens(text):
 
 
 def tokens(text):
-    cleaned = text.lower()
+    cleaned = text.translate(curly_quote_translator).lower()
     tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
     return tokens
 

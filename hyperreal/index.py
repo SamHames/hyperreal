@@ -1353,6 +1353,7 @@ class Index:
         group_test_top_k=1,
         group_test_batches=None,
         probe_query=None,
+        top_k=1,
     ):
         """
         Find the approximate next nearest cluster for each feature in this clustering.
@@ -1412,7 +1413,7 @@ class Index:
             cluster_feature,
             cluster_feature_checks,
             probe_query=probe_query,
-            top_k=1,
+            top_k=top_k,
         )
 
     def _refine_feature_groups(
@@ -2159,12 +2160,10 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                     ),
                 )
 
-            # Ensure we do all the inserts in sorted order as far as possible
             field_order = sorted(batch.keys())
 
             for field in field_order:
                 values = batch[field]
-                value_order = sorted(v for v in values if v is not None)
 
                 local_db.executemany(
                     "insert into inverted_index_segment values(?, ?, ?, ?, ?, ?, ?)",
@@ -2172,13 +2171,13 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                         (
                             field,
                             value,
-                            len(values[value][0]),
-                            values[value][0],
-                            len(values[value][1]),
-                            values[value][1] or None,
+                            len(docs),
+                            docs,
+                            len(positions),
+                            positions or None,
                             first_doc_id,
                         )
-                        for value in value_order
+                        for value, (docs, positions) in values.items()
                     ),
                 )
 
