@@ -15,7 +15,7 @@ import sys
 import traceback
 import zipfile
 
-from lxml import etree
+from lxml import html
 from markupsafe import Markup
 
 from hyperreal.index import Index
@@ -26,8 +26,6 @@ import hyperreal.server
 
 class HansardCorpus(SqliteBackedCorpus):
     CORPUS_TYPE = "Australian Federal Hansard"
-
-    table_fields = ["date", "house", "debate_title", "subdebate_title", "speech"]
 
     def __init__(self, db_path):
         """
@@ -49,21 +47,18 @@ class HansardCorpus(SqliteBackedCorpus):
                     self.db.execute(
                         """
                         select
-                            speech.speech_id,
-                            speech.date,
-                            speech.house,
-                            speech_number,
-                            debate.debate_id,
-                            debate.debate,
-                            debate.subdebate_1,
-                            debate.subdebate_2,
-                            xml_url,
-                            html_url,
-                            speech_xml
-                        from speech
+                            page_id,
+                            url,
+                            access_time,
+                            debate_id,
+                            pp.date,
+                            pp.house,
+                            pp.parl_no,
+                            title,
+                            page_html
+                        from proceedings_page pp
                         inner join debate using(debate_id)
-                        inner join transcript using(transcript_id)
-                        where speech.speech_id = ?
+                        where page_id = ?
                         """,
                         [key],
                     )
@@ -75,53 +70,27 @@ class HansardCorpus(SqliteBackedCorpus):
             self.db.execute("release docs")
 
     def index(self, doc):
-        root = etree.fromstring(doc["speech_xml"])
+        root = html.fromstring(doc["page_html"])
 
-        # TODO: This will need additional work to work with all the different
-        # hansard schemas.
-        talkers = root.xpath("//talker")
-        for elem in talkers:
-            elem.clear()
+        page_tokens = tokens(" ".join(root.itertext()))
 
-        speech_tokens = tokens(" ".join(root.itertext()))
-
-        speech_date = date.fromisoformat(doc["date"])
-        speech_month = speech_date.replace(day=1)
-        speech_year = speech_month.replace(month=1)
+        page_date = date.fromisoformat(doc["date"])
+        month = page_date.replace(day=1)
+        year = month.replace(month=1)
 
         return {
-            "speech": speech_tokens,
+            "page": page_tokens,
             "house": set([doc["house"]]),
-            "debate": set([doc["debate"]]),
-            "subdebate_1": set([doc["subdebate_1"]]),
-            "subdebate_2": set([doc["subdebate_2"]]),
             "debate_id": set([doc["debate_id"]]),
-            "speech_date": set([speech_date.isoformat()]),
-            "speech_month": set([speech_month.isoformat()]),
-            "speech_year": set([speech_year.isoformat()]),
-        }
-
-    def pretty_index(self, doc):
-        root = etree.fromstring(doc["speech_xml"])
-
-        # TODO: This will need additional work to work with all the different
-        # hansard schemas.
-        talkers = root.xpath("//talker")
-        for elem in talkers:
-            elem.clear()
-
-        speech_tokens = presentable_tokens(" ".join(root.itertext()))
-
-        speech_date = date.fromisoformat(doc["date"])
-
-        return {
-            "speech": speech_tokens,
-            "house": set([doc["house"]]),
-            "debate": set([doc["debate"]]),
-            "subdebate_1": set([doc["subdebate_1"]]),
-            "subdebate_2": set([doc["subdebate_2"]]),
-            "speech_date": set([speech_date.isoformat()]),
-            "transcript_url": set([doc["html_url"]]),
+            "date": set([page_date.isoformat()]),
+            "month": set([month.isoformat()]),
+            "year": set([year.isoformat()]),
+            "parl_no": set([doc["parl_no"]]),
+            # Index the formatting elements so we can systematically investigate them
+            "html_classes": {
+                str(clss) for elem in root.iter() for clss in elem.classes
+            },
+            "html_tags": {str(elem.tag) for elem in root.iter()},
         }
 
     def render_docs_html(self, doc_keys):
@@ -129,27 +98,20 @@ class HansardCorpus(SqliteBackedCorpus):
         docs = []
 
         for key, doc in self.docs(doc_keys=doc_keys):
-            tree = etree.fromstring(doc["speech_xml"])
-
-            text = " ".join(s for s in tree.itertext())
-            text = "<br />".join(s for s in text.splitlines() if s.strip())
-
             summary = ", ".join(
-                doc[item]
-                for item in ("date", "house", "debate", "subdebate_1", "subdebate_2")
-                if doc[item]
+                doc[item] for item in ("date", "house", "title") if doc[item]
             )
 
             doc_html = """
                 <details>
                     <summary>{}</summary>
                     <div>
-                        <a href="{}">See full day</a>
+                        <a href="{}">See in context</a>
                     </div>
                     <div>{}</div>
                 </details>
                 """.format(
-                summary, doc["html_url"], text
+                summary, doc["url"], doc["page_html"]
             )
 
             docs.append((key, Markup(doc_html)))
@@ -157,8 +119,11 @@ class HansardCorpus(SqliteBackedCorpus):
         return docs
 
     def keys(self):
-        """The speeches are the central document."""
-        return (r["speech_id"] for r in self.db.execute("select speech_id from speech"))
+        """The pages are the central document."""
+        return (
+            r["page_id"]
+            for r in self.db.execute("select page_id from proceedings_page")
+        )
 
 
 if __name__ == "__main__":
@@ -167,28 +132,33 @@ if __name__ == "__main__":
     except FileNotFoundError:
         pass
 
+    db = "tidy_hansard.db"
+    db_index = "tidy_hansard_index.db"
+
     logging.basicConfig(filename="process_hansard.log", level=logging.INFO)
-    corpus = HansardCorpus("hansard.db")
+    corpus = HansardCorpus(db)
 
     args = sys.argv[1:]
 
     mp_context = mp.get_context("spawn")
     with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
-        idx = Index("hansard_index.db", corpus=corpus, pool=pool)
+        idx = Index(db_index, corpus=corpus, pool=pool)
 
         if "index" in args:
-            idx.index(doc_batch_size=100000, position_window_size=1)
+            idx.index(doc_batch_size=50000, index_positions=True)
 
         if "cluster" in args:
             idx.initialise_clusters(
-                n_clusters=512, min_docs=10, include_fields=["speech"]
+                n_clusters=256, min_docs=100, include_fields=["page"]
             )
-            idx.refine_clusters(iterations=50, group_test_batches=100)
+            idx.refine_clusters(
+                iterations=50, group_test_batches=32, group_test_top_k=2
+            )
 
         index_server = hyperreal.server.SingleIndexServer(
-            "hansard_index.db",
+            db_index,
             corpus_class=HansardCorpus,
-            corpus_args=["hansard.db"],
+            corpus_args=[db],
             pool=pool,
         )
         engine = hyperreal.server.launch_web_server(index_server)
