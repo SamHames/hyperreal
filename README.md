@@ -1,3 +1,8 @@
+# Future Development
+
+This repository is archived. [New development happens in fossil](https://hyperreal.app) and a [git mirror is available at Codeberg](https://codeberg.org/sam_hames/hyperreal_mirror).
+
+
 # Hyperreal
 
 Hyperreal is a Python tool for interactive qualitative analysis of large
